@@ -73,4 +73,4 @@ RUST_LOG=debug cargo run -- generate -g examples/calc.g4 -l rust
 
 ## License
 
-MIT
+Apache-2.0

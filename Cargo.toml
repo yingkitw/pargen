@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A parser generator using ANTLR grammar syntax, outputting to Rust, Go, TypeScript, Python, Java, C, C++, and Tree-sitter"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "pargen"
