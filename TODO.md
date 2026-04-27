@@ -70,9 +70,11 @@ strip = true
 - Added `treesitter` codegen target
 - Generates `grammar.js` with `choice`, `seq`, `optional`, `repeat`, `repeat1`, `token`, regex charsets
 
-### [ ] 14. Error Diagnostics with Locations
-- Add line/column tracking to lexer tokens
-- Rich error messages with source location
+### [x] 14. Error Diagnostics with Locations
+- Lexer tokens carry `(line, column, offset)`
+- `core::Error::lexer()` / `core::Error::parser()` create structured errors with `SourceLocation`
+- `G4Lexer::tokenize()` and `G4Parser::parse()` now return `crate::core::Result<>` with proper error types
+- `lib.rs` uses `?` propagation directly without `map_err` wrappers
 
 ## Completed
 
@@ -86,13 +88,15 @@ strip = true
 - [x] 9. Add `insta`, `criterion`, `tempfile` to dev-dependencies
 - [x] 10. Add release profile optimization (opt-level 3, lto, codegen-units 1, strip)
 - [x] 11. Create `.gitignore` with Rust/Cargo, IDE, snapshot, and generated parser artifacts
-- [x] 12. Comprehensive test suite (102 tests)
-  - 24 lexer unit tests (token kinds, string literals, charsets, comments, errors, locations)
+- [x] 12. Comprehensive test suite (108 tests)
+  - 28 lexer unit tests (token kinds, string literals, charsets, comments, errors, locations, **4 proptests**)
   - 27 parser unit tests (grammar headers, rules, alternatives, groups, labels, actions, fragments, errors)
   - 8 left-recursion unit tests (direct, indirect, empty alternatives, multiple alternatives)
   - 13 core error unit tests (display, serialization, clone/equality)
-  - 21 integration tests (end-to-end parse, generate for all 7 languages, error cases)
-  - 9 codegen tests (structure verification for all target languages)
+  - 22 integration tests (end-to-end parse, generate for all **8** languages including treesitter, error cases)
+  - 10 codegen tests (structure verification for all target languages including treesitter)
+- [x] 13. Tree-sitter grammar generator (`treesitter` codegen target)
+- [x] 14. Parser/lexer return `crate::core::Result<>` with structured `Error::lexer()` / `Error::parser()` carrying `SourceLocation`
 
 ---
 Last updated: 2026-04-27
