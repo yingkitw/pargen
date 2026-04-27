@@ -162,3 +162,129 @@ fn capitalize(s: &str) -> String {
         Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(name: &str, alts: Vec<Vec<ElementKind>>) -> Rule {
+        Rule {
+            name: name.to_string(),
+            is_fragment: false,
+            modifiers: Vec::new(),
+            return_type: None,
+            locals_decl: None,
+            throws: Vec::new(),
+            alternatives: alts.into_iter()
+                .map(|elems| Alternative::new(elems.into_iter().map(Element::new).collect()))
+                .collect(),
+            commands: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_no_left_recursion() {
+        let rules = vec![
+            rule("expr", vec![
+                vec![ElementKind::TokenRef("NUMBER".to_string())],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "expr");
+    }
+
+    #[test]
+    fn test_direct_left_recursion() {
+        let rules = vec![
+            rule("expr", vec![
+                vec![ElementKind::RuleRef("expr".to_string()), ElementKind::TokenRef("PLUS".to_string()), ElementKind::RuleRef("term".to_string())],
+                vec![ElementKind::RuleRef("term".to_string())],
+            ]),
+            rule("term", vec![
+                vec![ElementKind::TokenRef("NUMBER".to_string())],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        // expr should be split into expr + exprSuffix
+        let expr_rule = result.iter().find(|r| r.name == "expr").unwrap();
+        let suffix_rule = result.iter().find(|r| r.name == "ExprSuffix").unwrap();
+        // expr should have base alternatives followed by suffix ref
+        assert!(!expr_rule.alternatives.is_empty());
+        // suffix should have recursive + empty alternatives
+        assert_eq!(suffix_rule.alternatives.len(), 2);
+    }
+
+    #[test]
+    fn test_indirect_left_recursion() {
+        let rules = vec![
+            rule("a", vec![
+                vec![ElementKind::RuleRef("b".to_string()), ElementKind::TokenRef("X".to_string())],
+                vec![ElementKind::TokenRef("Y".to_string())],
+            ]),
+            rule("b", vec![
+                vec![ElementKind::RuleRef("a".to_string()), ElementKind::TokenRef("Z".to_string())],
+                vec![ElementKind::TokenRef("W".to_string())],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        assert!(result.len() >= 2);
+    }
+
+    #[test]
+    fn test_empty_alternative_preserved() {
+        let rules = vec![
+            rule("list", vec![
+                vec![ElementKind::RuleRef("list".to_string()), ElementKind::TokenRef("COMMA".to_string()), ElementKind::RuleRef("item".to_string())],
+                vec![],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        assert!(result.len() >= 1);
+    }
+
+    #[test]
+    fn test_multiple_alternatives_with_lr() {
+        let rules = vec![
+            rule("expr", vec![
+                vec![ElementKind::RuleRef("expr".to_string()), ElementKind::TokenRef("PLUS".to_string()), ElementKind::RuleRef("term".to_string())],
+                vec![ElementKind::RuleRef("expr".to_string()), ElementKind::TokenRef("MINUS".to_string()), ElementKind::RuleRef("term".to_string())],
+                vec![ElementKind::RuleRef("term".to_string())],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        let expr_rule = result.iter().find(|r| r.name == "expr").unwrap();
+        let suffix_rule = result.iter().find(|r| r.name == "ExprSuffix").unwrap();
+        // suffix should have 3 alternatives: PLUS term suffix, MINUS term suffix, empty
+        assert_eq!(suffix_rule.alternatives.len(), 3);
+        assert!(expr_rule.alternatives.iter().all(|alt| {
+            alt.elements.last().map_or(false, |e| matches!(e.kind, ElementKind::RuleRef(ref n) if n == "ExprSuffix"))
+        }));
+    }
+
+    #[test]
+    fn test_has_direct_left_recursion() {
+        let lr_rule = rule("expr", vec![
+            vec![ElementKind::RuleRef("expr".to_string())],
+        ]);
+        assert!(has_direct_left_recursion(&lr_rule));
+
+        let non_lr_rule = rule("expr", vec![
+            vec![ElementKind::TokenRef("NUMBER".to_string())],
+        ]);
+        assert!(!has_direct_left_recursion(&non_lr_rule));
+    }
+
+    #[test]
+    fn test_transform_preserves_rule_name() {
+        let rules = vec![
+            rule("expr", vec![
+                vec![ElementKind::RuleRef("expr".to_string()), ElementKind::TokenRef("PLUS".to_string())],
+                vec![ElementKind::TokenRef("NUMBER".to_string())],
+            ]),
+        ];
+        let result = eliminate_left_recursion(&rules);
+        assert!(result.iter().any(|r| r.name == "expr"));
+        assert!(result.iter().any(|r| r.name == "ExprSuffix"));
+    }
+}

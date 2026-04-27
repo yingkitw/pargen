@@ -125,6 +125,14 @@ impl G4Parser {
         Ok(grammar)
     }
 
+    #[cfg(test)]
+    fn test_parse(source: &str) -> Result<Grammar, String> {
+        let lexer = super::lexer::G4Lexer::new(source);
+        let tokens = lexer.tokenize()?;
+        let mut parser = Self::new(tokens, source.to_string());
+        parser.parse()
+    }
+
     fn parse_options(&mut self, grammar: &mut Grammar) -> Result<(), String> {
         self.expect(G4TokenKind::Options)?;
         self.expect(G4TokenKind::Lbrace)?;
@@ -668,5 +676,236 @@ impl G4Parser {
             }
             _ => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_empty_fails() {
+        let result = G4Parser::test_parse("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_simple_grammar() {
+        let grammar = G4Parser::test_parse("grammar Calc;").unwrap();
+        assert_eq!(grammar.name, "Calc");
+        assert_eq!(grammar.kind, GrammarKind::Combined);
+        assert!(grammar.rules.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lexer_grammar() {
+        let grammar = G4Parser::test_parse("lexer grammar MyLexer;").unwrap();
+        assert_eq!(grammar.name, "MyLexer");
+        assert_eq!(grammar.kind, GrammarKind::Lexer);
+    }
+
+    #[test]
+    fn test_parse_parser_grammar() {
+        let grammar = G4Parser::test_parse("parser grammar MyParser;").unwrap();
+        assert_eq!(grammar.name, "MyParser");
+        assert_eq!(grammar.kind, GrammarKind::Parser);
+    }
+
+    #[test]
+    fn test_parse_single_rule() {
+        let grammar = G4Parser::test_parse("grammar Test; start: EOF;").unwrap();
+        assert_eq!(grammar.rules.len(), 1);
+        assert_eq!(grammar.rules[0].name, "start");
+    }
+
+    #[test]
+    fn test_parse_multiple_rules() {
+        let source = r#"grammar Test;
+expr: term '+' term;
+term: factor;
+factor: NUMBER;
+NUMBER: [0-9]+;
+"#;
+        let grammar = G4Parser::test_parse(source).unwrap();
+        assert_eq!(grammar.rules.len(), 4);
+        assert_eq!(grammar.rules[0].name, "expr");
+        assert_eq!(grammar.rules[1].name, "term");
+        assert_eq!(grammar.rules[2].name, "factor");
+        assert_eq!(grammar.rules[3].name, "NUMBER");
+    }
+
+    #[test]
+    fn test_parse_lexer_rule_with_charset() {
+        let grammar = G4Parser::test_parse("grammar Test; DIGIT: [0-9];").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.name, "DIGIT");
+        assert!(rule.is_lexer_rule());
+        assert_eq!(rule.alternatives.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_rule_with_alternatives() {
+        let grammar = G4Parser::test_parse("grammar Test; value: NUMBER | STRING;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_rule_with_optional() {
+        let grammar = G4Parser::test_parse("grammar Test; decl: type ID ('=' expr)?;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert_eq!(rule.alternatives[0].elements.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_rule_with_star() {
+        let grammar = G4Parser::test_parse("grammar Test; list: (item)*;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::ZeroOrMore(_)));
+    }
+
+    #[test]
+    fn test_parse_rule_with_plus() {
+        let grammar = G4Parser::test_parse("grammar Test; list: (item)+;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::OneOrMore(_)));
+    }
+
+    #[test]
+    fn test_parse_rule_with_group() {
+        let grammar = G4Parser::test_parse("grammar Test; expr: term (('+'|'-') term)*;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert_eq!(rule.alternatives[0].elements.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_fragment_rule() {
+        let grammar = G4Parser::test_parse("grammar Test; fragment DIGIT: [0-9];").unwrap();
+        let rule = &grammar.rules[0];
+        assert!(rule.is_fragment);
+        assert!(rule.is_lexer_rule());
+    }
+
+    #[test]
+    fn test_parse_rule_with_skip_command() {
+        let grammar = G4Parser::test_parse("grammar Test; WS: [ \\t\\n]+ -> skip;").unwrap();
+        let rule = &grammar.rules[0];
+        assert!(rule.is_skip());
+    }
+
+    #[test]
+    fn test_parse_rule_with_channel_command() {
+        let grammar = G4Parser::test_parse("grammar Test; COMMENT: '//' ~[\\n]* -> channel(HIDDEN);").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.channel(), Some("HIDDEN"));
+    }
+
+    #[test]
+    fn test_parse_import() {
+        let grammar = G4Parser::test_parse("grammar Test; import CommonLexer; start: EOF;").unwrap();
+        assert_eq!(grammar.name, "Test");
+    }
+
+    #[test]
+    fn test_parse_named_action() {
+        let grammar = G4Parser::test_parse(r#"grammar Test;
+@header { package foo; }
+start: EOF;
+"#).unwrap();
+        assert_eq!(grammar.actions.len(), 1);
+        assert_eq!(grammar.actions[0].name, "header");
+        assert_eq!(grammar.actions[0].content, "package foo;");
+    }
+
+    #[test]
+    fn test_parse_labeled_element() {
+        let grammar = G4Parser::test_parse("grammar Test; expr: left=term '+' right=term;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].elements[0].label, Some("left".to_string()));
+        assert_eq!(rule.alternatives[0].elements[2].label, Some("right".to_string()));
+    }
+
+    #[test]
+    fn test_parse_list_label() {
+        let grammar = G4Parser::test_parse("grammar Test; args: arg+=ID (',' arg+=ID)*;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].elements[0].label, Some("arg".to_string()));
+    }
+
+    #[test]
+    fn test_parse_alternative_label() {
+        let grammar = G4Parser::test_parse("grammar Test; expr: term #add | factor #mul;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].label, Some("add".to_string()));
+        assert_eq!(rule.alternatives[1].label, Some("mul".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rule_with_returns() {
+        let grammar = G4Parser::test_parse("grammar Test; expr returns [int value]: term;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.return_type, Some("int value".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rule_with_locals() {
+        let grammar = G4Parser::test_parse("grammar Test; expr locals [int count = 0]: term;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.locals_decl, Some("int count = 0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_not_predicate() {
+        let grammar = G4Parser::test_parse("grammar Test; expr: ~'(' term;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].elements.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_predicate() {
+        let grammar = G4Parser::test_parse("grammar Test; expr: { $a > 0 }? term;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].elements.len(), 2);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::Predicate(_)));
+    }
+
+    #[test]
+    fn test_unexpected_token_error() {
+        let result = G4Parser::test_parse("grammar Test start");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_trailing_tokens_error() {
+        let result = G4Parser::test_parse("grammar Test; start: EOF; extra");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_dot_wildcard() {
+        let grammar = G4Parser::test_parse("grammar Test; ANY: . ;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives[0].elements.len(), 1);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::Dot));
+    }
+
+    #[test]
+    fn test_parse_greedy_optional() {
+        let grammar = G4Parser::test_parse("grammar Test; opt: (item)??;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::Optional(_)));
+    }
+
+    #[test]
+    fn test_parse_greedy_star() {
+        let grammar = G4Parser::test_parse("grammar Test; list: (item)*?;").unwrap();
+        let rule = &grammar.rules[0];
+        assert_eq!(rule.alternatives.len(), 1);
+        assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::ZeroOrMore(_)));
     }
 }

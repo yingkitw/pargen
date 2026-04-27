@@ -84,6 +84,14 @@ strip = true
 - [x] 8. Replace all `println!` with `tracing` macros + `tracing_subscriber::fmt::init()`
 - [x] 9. Add `insta`, `criterion`, `tempfile` to dev-dependencies
 - [x] 10. Add release profile optimization (opt-level 3, lto, codegen-units 1, strip)
+- [x] 11. Create `.gitignore` with Rust/Cargo, IDE, snapshot, and generated parser artifacts
+- [x] 12. Comprehensive test suite (102 tests)
+  - 24 lexer unit tests (token kinds, string literals, charsets, comments, errors, locations)
+  - 27 parser unit tests (grammar headers, rules, alternatives, groups, labels, actions, fragments, errors)
+  - 8 left-recursion unit tests (direct, indirect, empty alternatives, multiple alternatives)
+  - 13 core error unit tests (display, serialization, clone/equality)
+  - 21 integration tests (end-to-end parse, generate for all 7 languages, error cases)
+  - 9 codegen tests (structure verification for all target languages)
 
 ---
 Last updated: 2026-04-27

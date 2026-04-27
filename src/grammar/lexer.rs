@@ -592,3 +592,258 @@ impl G4Lexer {
         Ok(G4Token::new(kind, &c.to_string(), line, col, offset))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_kinds(source: &str) -> Vec<G4TokenKind> {
+        let lexer = G4Lexer::new(source);
+        let tokens = lexer.tokenize().unwrap();
+        tokens.into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let kinds = token_kinds("");
+        assert_eq!(kinds, vec![G4TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_simple_grammar_header() {
+        let kinds = token_kinds("grammar Calc;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_lexer_grammar_header() {
+        let kinds = token_kinds("lexer grammar MyLexer;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Lexer,
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_parser_grammar_header() {
+        let kinds = token_kinds("parser grammar MyParser;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Parser,
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_rule_definition() {
+        let kinds = token_kinds("expr: term '+' term;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Id,
+            G4TokenKind::Colon,
+            G4TokenKind::Id,
+            G4TokenKind::StringLit,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let lexer = G4Lexer::new("'hello'");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, G4TokenKind::StringLit);
+        assert_eq!(tokens[0].text, "hello");
+    }
+
+    #[test]
+    fn test_escaped_string_literal() {
+        let lexer = G4Lexer::new("'hello\\nworld'");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, G4TokenKind::StringLit);
+        assert_eq!(tokens[0].text, "hello\nworld");
+    }
+
+    #[test]
+    fn test_escaped_quote_in_string() {
+        let lexer = G4Lexer::new("'it''s'");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].text, "it's");
+    }
+
+    #[test]
+    fn test_character_class() {
+        let lexer = G4Lexer::new("[a-zA-Z0-9]");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, G4TokenKind::CharsetContent);
+        assert_eq!(tokens[0].text, "a-zA-Z0-9");
+    }
+
+    #[test]
+    fn test_charset_with_whitespace() {
+        let lexer = G4Lexer::new("[ \\t\\r\\n]");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, G4TokenKind::CharsetContent);
+    }
+
+    #[test]
+    fn test_number_literal() {
+        let lexer = G4Lexer::new("42");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, G4TokenKind::IntLit);
+        assert_eq!(tokens[0].text, "42");
+    }
+
+    #[test]
+    fn test_symbols() {
+        let kinds = token_kinds("; : , . .. = += ? * + ~ | -> ( ) # @ ! $ ^");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Semi,
+            G4TokenKind::Colon,
+            G4TokenKind::Comma,
+            G4TokenKind::Dot,
+            G4TokenKind::DotDot,
+            G4TokenKind::Assign,
+            G4TokenKind::PlusAssign,
+            G4TokenKind::Question,
+            G4TokenKind::Star,
+            G4TokenKind::Plus,
+            G4TokenKind::Tilde,
+            G4TokenKind::Pipe,
+            G4TokenKind::Rarrow,
+            G4TokenKind::Lparen,
+            G4TokenKind::Rparen,
+            G4TokenKind::Hash,
+            G4TokenKind::At,
+            G4TokenKind::Bang,
+            G4TokenKind::Dollar,
+            G4TokenKind::Caret,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_keywords() {
+        let kinds = token_kinds(
+            "grammar lexer parser fragment protected public private returns locals throws options tokens channels import mode"
+        );
+        assert_eq!(kinds, vec![
+            G4TokenKind::Grammar,
+            G4TokenKind::Lexer,
+            G4TokenKind::Parser,
+            G4TokenKind::Fragment,
+            G4TokenKind::Protected,
+            G4TokenKind::Public,
+            G4TokenKind::Private,
+            G4TokenKind::Returns,
+            G4TokenKind::Locals,
+            G4TokenKind::Throws,
+            G4TokenKind::Options,
+            G4TokenKind::Tokens,
+            G4TokenKind::Channels,
+            G4TokenKind::Import,
+            G4TokenKind::Mode,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_line_comment() {
+        let kinds = token_kinds("grammar Test; // this is a comment");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_block_comment() {
+        let kinds = token_kinds("grammar /* comment */ Test;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_nested_block_comment() {
+        let kinds = token_kinds("grammar /* outer /* inner */ outer */ Test;");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Grammar,
+            G4TokenKind::Id,
+            G4TokenKind::Semi,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_unterminated_string() {
+        let lexer = G4Lexer::new("'hello");
+        assert!(lexer.tokenize().is_err());
+    }
+
+    #[test]
+    fn test_unterminated_block_comment() {
+        let lexer = G4Lexer::new("grammar /* unterminated");
+        assert!(lexer.tokenize().is_err());
+    }
+
+    #[test]
+    fn test_unexpected_character() {
+        let lexer = G4Lexer::new("grammar Test; %");
+        assert!(lexer.tokenize().is_err());
+    }
+
+    #[test]
+    fn test_lexer_command_arrow() {
+        let kinds = token_kinds("-> skip");
+        assert_eq!(kinds, vec![
+            G4TokenKind::Rarrow,
+            G4TokenKind::Id,
+            G4TokenKind::Eof,
+        ]);
+    }
+
+    #[test]
+    fn test_action_block() {
+        let lexer = G4Lexer::new("{ x + y }");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, G4TokenKind::Action);
+        assert_eq!(tokens[0].text, "x + y");
+    }
+
+    #[test]
+    fn test_nested_action_block() {
+        let lexer = G4Lexer::new("{ if (x) { y } }");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].kind, G4TokenKind::Action);
+        assert_eq!(tokens[0].text, "if (x) { y }");
+    }
+
+    #[test]
+    fn test_token_location() {
+        let lexer = G4Lexer::new("grammar\nTest;");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens[0].line, 1);
+        assert_eq!(tokens[0].col, 1);
+        assert_eq!(tokens[1].line, 2);
+        assert_eq!(tokens[1].col, 1);
+    }
+}
