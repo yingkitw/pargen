@@ -1,0 +1,37 @@
+[package]
+name = "pargen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A parser generator using ANTLR grammar syntax, outputting to Rust, Go, TypeScript, Python, Java, C, and C++"
+license = "MIT"
+
+[[bin]]
+name = "pargen"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+insta = "1.41"
+criterion = "0.5"
+tempfile = "3.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
