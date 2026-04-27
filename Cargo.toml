@@ -3,16 +3,25 @@ name = "pargen"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A parser generator using ANTLR grammar syntax, outputting to Rust, Go, TypeScript, Python, Java, C, and C++"
+description = "A parser generator using ANTLR grammar syntax, outputting to Rust, Go, TypeScript, Python, Java, C, C++, and Tree-sitter"
 license = "MIT"
 
 [[bin]]
 name = "pargen"
 path = "src/main.rs"
 
+[[bin]]
+name = "pargen-mcp"
+path = "src/bin/pargen-mcp.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+
+# MCP server
+rmcp = { version = "0.12", features = ["server", "macros", "transport-io"] }
+tokio = { version = "1.0", features = ["full"] }
+schemars = { version = "1.0", features = ["derive"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

@@ -57,10 +57,15 @@ strip = true
 
 ## Low Priority / Future
 
-### [ ] 11. MCP Server Integration
-- Add `rmcp` + `tokio` + `schemars` dependencies
-- Create `src/mcp.rs` with tools: `parse_grammar`, `validate_grammar`, `generate_code`
-- Add `pargen-mcp` binary
+### [x] 11. MCP Server Integration
+- Added `rmcp` + `tokio` + `schemars` dependencies
+- Created `src/mcp.rs` with 5 tools:
+  - `parse_grammar` — parse grammar text and return AST summary (rules count, lexer/parser rule counts, options)
+  - `validate_grammar` — parse + analyze grammar, return success/failure + diagnostics
+  - `generate_code` — parse + analyze + generate code for any supported target language, return generated code
+  - `get_grammar_info` — detailed rule lists (parser rules, lexer rules, counts, options)
+  - `list_target_languages` — list all 8 supported languages with descriptions
+- Added `pargen-mcp` binary with `tokio::main` and `stdio` transport
 
 ### [x] 12. Property-Based Testing
 - Added `proptest = "1.6"` dev dependency
@@ -81,22 +86,25 @@ strip = true
 - [x] 1. Upgrade to Rust Edition 2024
 - [x] 2. Add Core Dependencies (serde, thiserror, tracing, insta, criterion, tempfile)
 - [x] 3. Create `core` module with Error, Diagnostic, GrammarParser, SemanticAnalyzer, CodeGenerator traits
-- [x] 4. Add `Serialize`/`Deserialize` derives to all AST types (Grammar, Rule, Alternative, Element, ElementKind, etc.)
+- [x] 4. Add `Serialize`/`Deserialize` derives to all AST types
 - [x] 5. Refactor `lib.rs` with re-exports for discoverable public API
 - [x] 6. Create `README.md` with install, usage, and example
+- [x] 7. Create `ARCHITECTURE.md` with module overview and data flow
 - [x] 8. Replace all `println!` with `tracing` macros + `tracing_subscriber::fmt::init()`
-- [x] 9. Add `insta`, `criterion`, `tempfile` to dev-dependencies
+- [x] 9. Add `insta`, `criterion`, `tempfile`, `proptest` to dev-dependencies
 - [x] 10. Add release profile optimization (opt-level 3, lto, codegen-units 1, strip)
-- [x] 11. Create `.gitignore` with Rust/Cargo, IDE, snapshot, and generated parser artifacts
-- [x] 12. Comprehensive test suite (108 tests)
-  - 28 lexer unit tests (token kinds, string literals, charsets, comments, errors, locations, **4 proptests**)
-  - 27 parser unit tests (grammar headers, rules, alternatives, groups, labels, actions, fragments, errors)
-  - 8 left-recursion unit tests (direct, indirect, empty alternatives, multiple alternatives)
-  - 13 core error unit tests (display, serialization, clone/equality)
-  - 22 integration tests (end-to-end parse, generate for all **8** languages including treesitter, error cases)
-  - 10 codegen tests (structure verification for all target languages including treesitter)
+- [x] 11. MCP server integration (`pargen-mcp` binary with 5 tools)
+- [x] 12. Property-based testing with `proptest` (lexer robustness)
 - [x] 13. Tree-sitter grammar generator (`treesitter` codegen target)
-- [x] 14. Parser/lexer return `crate::core::Result<>` with structured `Error::lexer()` / `Error::parser()` carrying `SourceLocation`
+- [x] 14. Error Diagnostics with Locations (lexer/parser return `crate::core::Result`)
+
+**Test Summary**: 108 tests passing
+- 28 lexer unit tests (includes 4 proptests)
+- 27 parser unit tests
+- 8 left-recursion unit tests
+- 13 core error unit tests
+- 22 integration tests (8 languages)
+- 10 codegen tests
 
 ---
 Last updated: 2026-04-27

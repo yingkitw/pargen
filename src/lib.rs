@@ -2,6 +2,7 @@ pub mod core;
 pub mod grammar;
 pub mod analysis;
 pub mod codegen;
+pub mod mcp;
 
 pub use core::{Error, Result, Diagnostic, DiagnosticSeverity};
 pub use core::{GrammarParser, SemanticAnalyzer, CodeGenerator};
