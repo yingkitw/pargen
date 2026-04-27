@@ -17,9 +17,9 @@ pub fn parse_grammar_file(path: &str) -> AnyhowResult<grammar::Grammar> {
 
 pub fn parse_grammar_source(source: &str) -> AnyhowResult<grammar::Grammar> {
     let lexer = grammar::G4Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+    let tokens = lexer.tokenize()?;
     let parser = grammar::G4Parser::new(tokens, source.to_string());
-    let grammar = parser.parse().map_err(|e| anyhow::anyhow!("Parser error: {}", e))?;
+    let grammar = parser.parse()?;
     Ok(grammar)
 }
 

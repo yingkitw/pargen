@@ -171,7 +171,7 @@ impl G4Lexer {
         }
     }
 
-    pub fn tokenize(mut self) -> Result<Vec<G4Token>, String> {
+    pub fn tokenize(mut self) -> crate::core::Result<Vec<G4Token>> {
         while self.pos < self.input.len() {
             self.skip_whitespace_and_comments()?;
             if self.pos >= self.input.len() {
@@ -254,7 +254,7 @@ impl G4Lexer {
         }
     }
 
-    fn skip_whitespace_and_comments(&mut self) -> Result<(), String> {
+    fn skip_whitespace_and_comments(&mut self) -> crate::core::Result<()> {
         while self.pos < self.input.len() {
             let c = self.input[self.pos];
             if c.is_whitespace() {
@@ -281,7 +281,7 @@ impl G4Lexer {
                     }
                 }
                 if depth > 0 {
-                    return Err("Unterminated block comment".to_string());
+                    return Err(crate::core::Error::lexer(self.line, self.col, "Unterminated block comment"));
                 }
             } else {
                 break;
@@ -290,7 +290,7 @@ impl G4Lexer {
         Ok(())
     }
 
-    fn read_string_literal(&mut self) -> Result<G4Token, String> {
+    fn read_string_literal(&mut self) -> crate::core::Result<G4Token> {
         let offset = self.pos;
         let line = self.line;
         let col = self.col;
@@ -324,7 +324,7 @@ impl G4Lexer {
                     }
                 }
                 '\n' => {
-                    return Err(format!("Unterminated string literal at line {}", line));
+                    return Err(crate::core::Error::lexer(line, col, "Unterminated string literal"));
                 }
                 c => {
                     text.push(c);
@@ -332,10 +332,10 @@ impl G4Lexer {
                 }
             }
         }
-        Err(format!("Unterminated string literal at line {}", line))
+        Err(crate::core::Error::lexer(line, col, "Unterminated string literal"))
     }
 
-    fn read_action_block(&mut self, offset: usize, line: usize, col: usize) -> Result<G4Token, String> {
+    fn read_action_block(&mut self, offset: usize, line: usize, col: usize) -> crate::core::Result<G4Token> {
         let mut depth = 0;
         let mut content = String::new();
         while self.pos < self.input.len() {
@@ -422,7 +422,7 @@ impl G4Lexer {
                 }
             }
         }
-        Err(format!("Unterminated action block at line {}", line))
+        Err(crate::core::Error::lexer(line, col, "Unterminated action block"))
     }
 
     fn read_bracket_content(&mut self) -> String {
@@ -520,7 +520,7 @@ impl G4Lexer {
         G4Token::new(kind, &text, line, col, offset)
     }
 
-    fn read_symbol(&mut self, offset: usize, line: usize, col: usize) -> Result<G4Token, String> {
+    fn read_symbol(&mut self, offset: usize, line: usize, col: usize) -> crate::core::Result<G4Token> {
         let c = self.input[self.pos];
         let kind = match c {
             ':' => {
@@ -575,17 +575,11 @@ impl G4Lexer {
                     self.advance();
                     G4TokenKind::Rarrow
                 } else {
-                    return Err(format!(
-                        "Unexpected character '{}' at line {} col {}",
-                        c, self.line, self.col
-                    ));
+                    return Err(crate::core::Error::lexer(self.line, self.col, format!("Unexpected character '{}'", c)));
                 }
             }
             _ => {
-                return Err(format!(
-                    "Unexpected character '{}' at line {} col {}",
-                    c, self.line, self.col
-                ));
+                return Err(crate::core::Error::lexer(self.line, self.col, format!("Unexpected character '{}'", c)));
             }
         };
         self.advance();
@@ -845,5 +839,44 @@ mod tests {
         assert_eq!(tokens[0].col, 1);
         assert_eq!(tokens[1].line, 2);
         assert_eq!(tokens[1].col, 1);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_lexer_never_panics(input in "[a-zA-Z0-9_;:|*+?(){}\\[\\]\\.\\->=,!@#$%^&~'\" \\t\\n\\r]*") {
+            let lexer = G4Lexer::new(&input);
+            let _ = lexer.tokenize(); // must not panic
+        }
+
+        #[test]
+        fn prop_whitespace_only_yields_eof(input in "[ \\t\\n\\r]+") {
+            let lexer = G4Lexer::new(&input);
+            let tokens = lexer.tokenize().unwrap();
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].kind, G4TokenKind::Eof);
+        }
+
+        #[test]
+        fn prop_comment_only_yields_eof(comment in "//[a-zA-Z0-9_ ]*\\n") {
+            let lexer = G4Lexer::new(&comment);
+            let tokens = lexer.tokenize().unwrap();
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(tokens[0].kind, G4TokenKind::Eof);
+        }
+
+        #[test]
+        fn prop_grammar_header_tokens(name in "[a-zA-Z][a-zA-Z0-9_]*") {
+            let source = format!("grammar {};", name);
+            let lexer = G4Lexer::new(&source);
+            let tokens = lexer.tokenize().unwrap();
+            assert_eq!(tokens.len(), 4);
+            assert_eq!(tokens[0].kind, G4TokenKind::Grammar);
+            assert_eq!(tokens[1].kind, G4TokenKind::Id);
+            assert_eq!(tokens[1].text, name);
+            assert_eq!(tokens[2].kind, G4TokenKind::Semi);
+            assert_eq!(tokens[3].kind, G4TokenKind::Eof);
+        }
     }
 }

@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 insta = "1.41"
 criterion = "0.5"
 tempfile = "3.11"
+proptest = "1.6"
 
 [profile.release]
 opt-level = 3

@@ -5,6 +5,7 @@ pub mod python;
 pub mod java;
 pub mod c;
 pub mod cpp;
+pub mod treesitter;
 
 use crate::analysis::ProcessedGrammar;
 use anyhow::{anyhow, Result};
@@ -25,7 +26,8 @@ pub fn get_generator(lang: &str) -> Result<Box<dyn CodeGenerator>> {
         "java" => Ok(Box::new(java::JavaGenerator)),
         "c" => Ok(Box::new(c::CGenerator)),
         "cpp" | "c++" | "cplusplus" => Ok(Box::new(cpp::CppGenerator)),
-        _ => Err(anyhow!("Unsupported language: {}. Supported: rust, go, typescript, python, java, c, cpp", lang)),
+        "treesitter" | "tree-sitter" => Ok(Box::new(treesitter::TreeSitterGenerator)),
+        _ => Err(anyhow!("Unsupported language: {}. Supported: rust, go, typescript, python, java, c, cpp, treesitter", lang)),
     }
 }
 

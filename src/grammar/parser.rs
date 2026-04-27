@@ -1,3 +1,4 @@
+use crate::core::Error;
 use crate::grammar::ast::*;
 use crate::grammar::lexer::{G4Token, G4TokenKind};
 
@@ -16,13 +17,13 @@ impl G4Parser {
         }
     }
 
-    pub fn parse(mut self) -> Result<Grammar, String> {
+    pub fn parse(mut self) -> crate::core::Result<Grammar> {
         let grammar = self.parse_grammar()?;
         if !self.at_end() {
             let tok = self.current();
-            return Err(format!(
-                "Unexpected token {:?} ('{}') at line {} col {}, expected end of input",
-                tok.kind, tok.text, tok.line, tok.col
+            return Err(Error::parser(
+                tok.line, tok.col,
+                format!("Unexpected token {:?} ('{}'), expected end of input", tok.kind, tok.text)
             ));
         }
         Ok(grammar)
@@ -50,14 +51,14 @@ impl G4Parser {
         tok
     }
 
-    fn expect(&mut self, kind: G4TokenKind) -> Result<G4Token, String> {
+    fn expect(&mut self, kind: G4TokenKind) -> crate::core::Result<G4Token> {
         if self.peek_kind() == kind {
             Ok(self.advance())
         } else {
             let tok = self.current();
-            Err(format!(
-                "Expected {} but found {:?} ('{}') at line {} col {}",
-                kind, tok.kind, tok.text, tok.line, tok.col
+            Err(Error::parser(
+                tok.line, tok.col,
+                format!("Expected {} but found {:?} ('{}')", kind, tok.kind, tok.text)
             ))
         }
     }
@@ -70,7 +71,7 @@ impl G4Parser {
         }
     }
 
-    fn parse_grammar(&mut self) -> Result<Grammar, String> {
+    fn parse_grammar(&mut self) -> crate::core::Result<Grammar> {
         let mut kind = GrammarKind::Combined;
         if self.peek_kind() == G4TokenKind::Lexer {
             self.advance();
@@ -126,14 +127,14 @@ impl G4Parser {
     }
 
     #[cfg(test)]
-    fn test_parse(source: &str) -> Result<Grammar, String> {
+    fn test_parse(source: &str) -> crate::core::Result<Grammar> {
         let lexer = super::lexer::G4Lexer::new(source);
         let tokens = lexer.tokenize()?;
         let mut parser = Self::new(tokens, source.to_string());
         parser.parse()
     }
 
-    fn parse_options(&mut self, grammar: &mut Grammar) -> Result<(), String> {
+    fn parse_options(&mut self, grammar: &mut Grammar) -> crate::core::Result<()> {
         self.expect(G4TokenKind::Options)?;
         self.expect(G4TokenKind::Lbrace)?;
         while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
@@ -144,9 +145,10 @@ impl G4Parser {
                 G4TokenKind::StringLit => self.advance().text,
                 G4TokenKind::IntLit => self.advance().text,
                 _ => {
-                    return Err(format!(
-                        "Expected option value at line {}",
-                        self.current().line
+                    let tok = self.current();
+                    return Err(Error::parser(
+                        tok.line, tok.col,
+                        "Expected option value"
                     ))
                 }
             };
@@ -157,7 +159,7 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_tokens(&mut self, grammar: &mut Grammar) -> Result<(), String> {
+    fn parse_tokens(&mut self, grammar: &mut Grammar) -> crate::core::Result<()> {
         self.expect(G4TokenKind::Tokens)?;
         self.expect(G4TokenKind::Lbrace)?;
         while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
@@ -169,7 +171,7 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_channels(&mut self, grammar: &mut Grammar) -> Result<(), String> {
+    fn parse_channels(&mut self, grammar: &mut Grammar) -> crate::core::Result<()> {
         self.expect(G4TokenKind::Channels)?;
         self.expect(G4TokenKind::Lbrace)?;
         while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
@@ -181,7 +183,7 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_import(&mut self) -> Result<(), String> {
+    fn parse_import(&mut self) -> crate::core::Result<()> {
         self.expect(G4TokenKind::Import)?;
         loop {
             self.expect(G4TokenKind::Id)?;
@@ -193,7 +195,7 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_action(&mut self, grammar: &mut Grammar) -> Result<(), String> {
+    fn parse_action(&mut self, grammar: &mut Grammar) -> crate::core::Result<()> {
         self.expect(G4TokenKind::At)?;
         let scope = if self.peek_kind() == G4TokenKind::Id
             && self.tokens.get(self.pos + 1).map(|t| t.kind) == Some(G4TokenKind::Colon)
@@ -214,14 +216,14 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_mode(&mut self, _grammar: &mut Grammar) -> Result<(), String> {
+    fn parse_mode(&mut self, _grammar: &mut Grammar) -> crate::core::Result<()> {
         self.advance();
         let _name = self.expect(G4TokenKind::Id)?;
         self.expect(G4TokenKind::Semi)?;
         Ok(())
     }
 
-    fn parse_rule(&mut self) -> Result<Rule, String> {
+    fn parse_rule(&mut self) -> crate::core::Result<Rule> {
         let mut modifiers = Vec::new();
         let mut is_fragment = false;
 
@@ -337,7 +339,7 @@ impl G4Parser {
         })
     }
 
-    fn read_until_matching_bracket(&mut self) -> Result<String, String> {
+    fn read_until_matching_bracket(&mut self) -> crate::core::Result<String> {
         let mut content = String::new();
         let mut depth = 0;
         while !self.at_end() {
@@ -361,7 +363,7 @@ impl G4Parser {
         Ok(content.trim().to_string())
     }
 
-    fn parse_lexer_alternatives(&mut self) -> Result<Vec<Alternative>, String> {
+    fn parse_lexer_alternatives(&mut self) -> crate::core::Result<Vec<Alternative>> {
         let mut alts = Vec::new();
         alts.push(self.parse_lexer_alternative()?);
         while self.match_kind(G4TokenKind::Pipe).is_some() {
@@ -370,7 +372,7 @@ impl G4Parser {
         Ok(alts)
     }
 
-    fn parse_lexer_alternative(&mut self) -> Result<Alternative, String> {
+    fn parse_lexer_alternative(&mut self) -> crate::core::Result<Alternative> {
         let mut elements = Vec::new();
         while !self.at_end() && !matches!(self.peek_kind(), G4TokenKind::Pipe | G4TokenKind::Semi | G4TokenKind::Rarrow) {
             if let Some(elem) = self.parse_lexer_element()? {
@@ -382,7 +384,7 @@ impl G4Parser {
         Ok(Alternative::new(elements))
     }
 
-    fn parse_lexer_element(&mut self) -> Result<Option<Element>, String> {
+    fn parse_lexer_element(&mut self) -> crate::core::Result<Option<Element>> {
         let kind = match self.peek_kind() {
             G4TokenKind::StringLit => {
                 let tok = self.advance();
@@ -398,7 +400,8 @@ impl G4Parser {
                 if let Some(inner) = inner {
                     Some(ElementKind::Not(Box::new(inner.kind)))
                 } else {
-                    return Err("Expected element after '~'".to_string());
+                    let tok = self.current();
+                    return Err(Error::parser(tok.line, tok.col, "Expected element after '~'"));
                 }
             }
             G4TokenKind::CharsetContent => {
@@ -433,7 +436,7 @@ impl G4Parser {
         Ok(Some(Element::new(kind)))
     }
 
-    fn parse_lexer_atom(&mut self) -> Result<Option<Element>, String> {
+    fn parse_lexer_atom(&mut self) -> crate::core::Result<Option<Element>> {
         match self.peek_kind() {
             G4TokenKind::StringLit => {
                 let tok = self.advance();
@@ -461,7 +464,7 @@ impl G4Parser {
         }
     }
 
-    fn parse_suffix(&mut self, kind: ElementKind) -> Result<ElementKind, String> {
+    fn parse_suffix(&mut self, kind: ElementKind) -> crate::core::Result<ElementKind> {
         match self.peek_kind() {
             G4TokenKind::Question => {
                 self.advance();
@@ -482,7 +485,7 @@ impl G4Parser {
         }
     }
 
-    fn parse_block_suffix(&mut self, block: AltBlock) -> Result<ElementKind, String> {
+    fn parse_block_suffix(&mut self, block: AltBlock) -> crate::core::Result<ElementKind> {
         match self.peek_kind() {
             G4TokenKind::Question => {
                 self.advance();
@@ -503,7 +506,7 @@ impl G4Parser {
         }
     }
 
-    fn parse_charset_content(&self, content: &str) -> Result<CharSetDef, String> {
+    fn parse_charset_content(&self, content: &str) -> crate::core::Result<CharSetDef> {
         let mut ranges = Vec::new();
         let mut negated = false;
         let chars: Vec<char> = content.chars().collect();
@@ -575,7 +578,7 @@ impl G4Parser {
         Ok(CharSetDef::new(ranges, negated))
     }
 
-    fn parse_parser_alternatives(&mut self) -> Result<Vec<Alternative>, String> {
+    fn parse_parser_alternatives(&mut self) -> crate::core::Result<Vec<Alternative>> {
         let mut alts = Vec::new();
         alts.push(self.parse_parser_alternative()?);
         while self.match_kind(G4TokenKind::Pipe).is_some() {
@@ -584,7 +587,7 @@ impl G4Parser {
         Ok(alts)
     }
 
-    fn parse_parser_alternative(&mut self) -> Result<Alternative, String> {
+    fn parse_parser_alternative(&mut self) -> crate::core::Result<Alternative> {
         let mut elements = Vec::new();
         while !self.at_end()
             && !matches!(
@@ -605,7 +608,7 @@ impl G4Parser {
         Ok(alt)
     }
 
-    fn parse_parser_element(&mut self) -> Result<Option<Element>, String> {
+    fn parse_parser_element(&mut self) -> crate::core::Result<Option<Element>> {
         let mut label = None;
         if self.peek_kind() == G4TokenKind::Id {
             let next = self.tokens.get(self.pos + 1);
@@ -646,7 +649,8 @@ impl G4Parser {
                 if let Some(inner) = self.parse_lexer_atom()? {
                     Ok(Some(Element::new(ElementKind::Not(Box::new(inner.kind)))))
                 } else {
-                    Err("Expected element after '~'".to_string())
+                    let tok = self.current();
+                    Err(Error::parser(tok.line, tok.col, "Expected element after '~'"))
                 }
             }
             G4TokenKind::CharsetContent => {

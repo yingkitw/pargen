@@ -173,6 +173,21 @@ fn test_generate_c_parser() {
 }
 
 #[test]
+fn test_generate_treesitter_parser() {
+    let grammar = parse_grammar_source(calculator_grammar()).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path().to_str().unwrap();
+    generate(grammar, "treesitter", temp_path).unwrap();
+
+    let output_file = temp_dir.path().join("calculator_parser.js");
+    assert!(output_file.exists());
+    let content = std::fs::read_to_string(&output_file).unwrap();
+    assert!(content.contains("module.exports = grammar({"));
+    assert!(content.contains("name: 'calculator',"));
+    assert!(content.contains("rules: {"));
+}
+
+#[test]
 fn test_generate_cpp_parser() {
     let grammar = parse_grammar_source(calculator_grammar()).unwrap();
     let temp_dir = tempfile::tempdir().unwrap();

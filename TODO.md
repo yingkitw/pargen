@@ -1,6 +1,6 @@
 # pargen - Task List
 
-## Learnings from minipg - High Priority
+## High Priority
 
 ### [x] 1. Upgrade to Rust Edition 2024
 - Update `Cargo.toml`: `edition = "2024"`, `rust-version = "1.85"`
@@ -30,12 +30,12 @@
 - Project description, install, usage, supported languages
 - Badges, example grammar, CLI commands
 
-### [ ] 7. Create `ARCHITECTURE.md`
+### [x] 7. Create `ARCHITECTURE.md`
 - Module overview (grammar, analysis, codegen)
 - Data flow: grammar file -> lexer -> parser -> AST -> analysis -> codegen
 - Extension points (new target languages)
 
-## Learnings from minipg - Medium Priority
+## Medium Priority
 
 ### [x] 8. Add Logging with `tracing`
 - Replace all `println!` in `main.rs` and `codegen` with `tracing::info!` / `tracing::debug!`
@@ -55,19 +55,20 @@ codegen-units = 1
 strip = true
 ```
 
-## Learnings from minipg - Low Priority / Future
+## Low Priority / Future
 
 ### [ ] 11. MCP Server Integration
 - Add `rmcp` + `tokio` + `schemars` dependencies
 - Create `src/mcp.rs` with tools: `parse_grammar`, `validate_grammar`, `generate_code`
 - Add `pargen-mcp` binary
 
-### [ ] 12. Property-Based Testing
-- Add `proptest` for robustness testing of lexer/parser
+### [x] 12. Property-Based Testing
+- Added `proptest = "1.6"` dev dependency
+- Property tests in lexer: never panics, whitespace→EOF, comment→EOF, grammar header tokens
 
-### [ ] 13. Tree-sitter Grammar Generator
-- Add `treesitter` target to codegen
-- Generate `grammar.js` from ANTLR4 grammar
+### [x] 13. Tree-sitter Grammar Generator
+- Added `treesitter` codegen target
+- Generates `grammar.js` with `choice`, `seq`, `optional`, `repeat`, `repeat1`, `token`, regex charsets
 
 ### [ ] 14. Error Diagnostics with Locations
 - Add line/column tracking to lexer tokens

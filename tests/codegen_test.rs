@@ -120,7 +120,21 @@ fn test_codegen_all_languages_for_simple_grammar() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().to_str().unwrap();
 
-    for lang in ["rust", "go", "typescript", "python", "java", "c", "cpp"] {
+    for lang in ["rust", "go", "typescript", "python", "java", "c", "cpp", "treesitter"] {
         generate(grammar.clone(), lang, path).expect(&format!("Failed to generate {lang}"));
     }
+}
+
+#[test]
+fn test_treesitter_codegen_contains_grammar_js() {
+    let grammar = parse_grammar_source(simple_grammar()).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    generate(grammar, "treesitter", temp_dir.path().to_str().unwrap()).unwrap();
+
+    let content = std::fs::read_to_string(temp_dir.path().join("simple_parser.js")).unwrap();
+    assert!(content.contains("module.exports = grammar({"));
+    assert!(content.contains("name: 'simple',"));
+    assert!(content.contains("rules: {"));
+    assert!(content.contains("start: $ => seq('hello', $.i_d),"));
+    assert!(content.contains("i_d: $ => token(repeat1(/[a-z]+/)),"));
 }
