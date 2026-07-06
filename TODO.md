@@ -98,13 +98,46 @@ strip = true
 - [x] 13. Tree-sitter grammar generator (`treesitter` codegen target)
 - [x] 14. Error Diagnostics with Locations (lexer/parser return `crate::core::Result`)
 
-**Test Summary**: 108 tests passing
+**Test Summary**: 116 tests passing
 - 28 lexer unit tests (includes 4 proptests)
 - 27 parser unit tests
 - 8 left-recursion unit tests
 - 13 core error unit tests
 - 22 integration tests (8 languages)
-- 10 codegen tests
+- 18 codegen tests (10 structure + 8 insta snapshots)
 
 ---
-Last updated: 2026-04-27
+
+## Brainstorming (Competitive Intelligence)
+
+Compared against ANTLR4, LALRPOP, Pest, and Tree-sitter. Prioritized by competitive advantage for `pargen`'s niche (ANTLR4 grammar → multi-target standalone parsers).
+
+### High Value
+
+- [ ] **Error recovery & multi-error reporting** — Pest and ANTLR report multiple parse errors with suggestions; pargen stops on first error. Critical for grammar authoring UX.
+- [x] **Codegen snapshot tests with `insta`** — 8 snapshot tests lock generated output per language for the simple grammar.
+- [ ] **Lexer modes code generation** — ANTLR modes are parsed into AST but not emitted. Needed for real-world grammars (e.g., string/comment states).
+- [ ] **Semantic predicate enforcement** — `{ ... }?` / `{ ... }^` predicates are in AST but ignored by codegen. ANTLR's key differentiator for context-sensitive grammars.
+- [ ] **Visitor / listener pattern generation** — ANTLR auto-generates tree walkers. High demand for compiler pipelines built on generated parsers.
+
+### Medium Value
+
+- [ ] **Grammar import resolution** — ANTLR `import` and `tokenVocab` are parsed but not merged. Blocks composing grammars from libraries.
+- [ ] **Channel support in generated lexers** — ANTLR channels (e.g., `HIDDEN`) for comments/whitespace. Parsed but not codegen'd.
+- [ ] **Benchmarks with `criterion`** — Dependency present but no benches. Compare parse/codegen throughput vs hand-written parsers.
+- [ ] **WASM codegen target** — Enable browser-based grammar playgrounds (competitive with Ohm.js / Peggy).
+- [ ] **Swift / C# codegen targets** — ANTLR's strongest ecosystems beyond what pargen already covers.
+- [ ] **Grammar diff / migration tool** — Convert between ANTLR4 and Tree-sitter grammars bidirectionally (pargen already does ANTLR → Tree-sitter one-way).
+
+### Lower Priority / Exploratory
+
+- [ ] **Incremental parsing** — Tree-sitter's core advantage for editors. Requires GLR/incremental runtime, not just grammar.js export.
+- [ ] **Tree-sitter query/highlight generation** — Emit `.scm` query files alongside `grammar.js` for full editor integration.
+- [ ] **Grammar visualization** — ANTLR plugins show railroad diagrams. Useful for documentation and grammar debugging.
+- [ ] **Online playground** — Web UI for paste-grammar-generate (Ohm.js, Peggy offer this).
+- [ ] **LALRPOP-style grammar macros** — Parameterized rule templates for DRY grammars (comma-separated lists, etc.).
+- [ ] **AST auto-generation** — ANTLR and LALRPOP build typed AST nodes; pargen generates parse functions only.
+
+---
+
+Last updated: 2026-07-06

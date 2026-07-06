@@ -1,4 +1,4 @@
-use pargen::{parse_grammar_source, generate};
+use pargen::{parse_grammar_source, generate, analysis::ProcessedGrammar, codegen};
 
 fn simple_grammar() -> &'static str {
     r#"grammar Simple;
@@ -6,6 +6,13 @@ start: 'hello' ID;
 ID: [a-z]+;
 WS: [ \t\n]+ -> skip;
 "#
+}
+
+fn generate_source(lang: &str) -> String {
+    let grammar = parse_grammar_source(simple_grammar()).unwrap();
+    let processed = ProcessedGrammar::process(grammar).unwrap();
+    let generator = codegen::get_generator(lang).unwrap();
+    generator.generate(&processed)
 }
 
 #[test]
@@ -137,4 +144,44 @@ fn test_treesitter_codegen_contains_grammar_js() {
     assert!(content.contains("rules: {"));
     assert!(content.contains("start: $ => seq('hello', $.i_d),"));
     assert!(content.contains("i_d: $ => token(repeat1(/[a-z]+/)),"));
+}
+
+#[test]
+fn snapshot_simple_rust() {
+    insta::assert_snapshot!(generate_source("rust"));
+}
+
+#[test]
+fn snapshot_simple_go() {
+    insta::assert_snapshot!(generate_source("go"));
+}
+
+#[test]
+fn snapshot_simple_typescript() {
+    insta::assert_snapshot!(generate_source("typescript"));
+}
+
+#[test]
+fn snapshot_simple_python() {
+    insta::assert_snapshot!(generate_source("python"));
+}
+
+#[test]
+fn snapshot_simple_java() {
+    insta::assert_snapshot!(generate_source("java"));
+}
+
+#[test]
+fn snapshot_simple_c() {
+    insta::assert_snapshot!(generate_source("c"));
+}
+
+#[test]
+fn snapshot_simple_cpp() {
+    insta::assert_snapshot!(generate_source("cpp"));
+}
+
+#[test]
+fn snapshot_simple_treesitter() {
+    insta::assert_snapshot!(generate_source("treesitter"));
 }

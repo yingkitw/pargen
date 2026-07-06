@@ -5,15 +5,13 @@ use crate::grammar::lexer::{G4Token, G4TokenKind};
 pub struct G4Parser {
     tokens: Vec<G4Token>,
     pos: usize,
-    source: String,
 }
 
 impl G4Parser {
-    pub fn new(tokens: Vec<G4Token>, source: String) -> Self {
+    pub fn new(tokens: Vec<G4Token>) -> Self {
         Self {
             tokens,
             pos: 0,
-            source,
         }
     }
 
@@ -130,8 +128,7 @@ impl G4Parser {
     fn test_parse(source: &str) -> crate::core::Result<Grammar> {
         let lexer = super::lexer::G4Lexer::new(source);
         let tokens = lexer.tokenize()?;
-        let mut parser = Self::new(tokens, source.to_string());
-        parser.parse()
+        Self::new(tokens).parse()
     }
 
     fn parse_options(&mut self, grammar: &mut Grammar) -> crate::core::Result<()> {

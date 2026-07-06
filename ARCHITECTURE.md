@@ -39,7 +39,10 @@ src/
 │   ├── python.rs       — PythonGenerator
 │   ├── java.rs         — JavaGenerator
 │   ├── c.rs            — CGenerator
-│   └── cpp.rs          — CppGenerator
+│   ├── cpp.rs          — CppGenerator
+│   └── treesitter.rs   — TreeSitterGenerator (grammar.js)
+├── mcp.rs              — MCP server tools (parse, validate, generate, inspect)
+├── bin/pargen-mcp.rs   — MCP binary entry point (stdio transport)
 ├── lib.rs              — public API: parse_grammar_file, parse_grammar_source, generate
 └── main.rs             — CLI entry point (clap subcommands: generate, init, parse, check)
 ```
@@ -59,7 +62,7 @@ src/
    │
    ▼
 ┌─────────────┐
-│   Parser    │  G4Parser::new(tokens, source).parse()
+│   Parser    │  G4Parser::new(tokens).parse()
 │  (grammar)  │  → Grammar AST
 └─────────────┘
    │
@@ -265,14 +268,14 @@ Tests are organized by scope:
 
 | Test File | Count | Scope |
 |-----------|-------|-------|
-| `src/grammar/lexer.rs` (`#[cfg(test)]`) | 24 | Token kinds, literals, comments, errors |
+| `src/grammar/lexer.rs` (`#[cfg(test)]`) | 28 | Token kinds, literals, comments, errors, proptests |
 | `src/grammar/parser.rs` (`#[cfg(test)]`) | 27 | Grammar headers, rules, alternatives, labels, actions, fragments, error cases |
 | `src/analysis/left_rec.rs` (`#[cfg(test)]`) | 8 | Direct/indirect left recursion, empty alternatives |
 | `src/core/error.rs` (`#[cfg(test)]`) | 13 | Display, IO conversion, serde round-trip, clone/equality |
-| `tests/integration_test.rs` | 21 | End-to-end parse + generate for all 7 languages, error cases |
-| `tests/codegen_test.rs` | 9 | Structure verification of generated code per language |
+| `tests/integration_test.rs` | 22 | End-to-end parse + generate for all 8 targets, error cases |
+| `tests/codegen_test.rs` | 18 | Structure verification + insta snapshots per language |
 
-**102 tests total**, all run with `cargo test`.
+**116 tests total**, all run with `cargo test`.
 
 ---
 
@@ -285,9 +288,11 @@ Tests are organized by scope:
 | `thiserror` | Structured `Error` enum with `Display` |
 | `serde` + `serde_json` | AST serialization / diagnostics |
 | `tracing` + `tracing-subscriber` | Structured logging |
-| `insta` (dev) | Snapshot testing (ready for future codegen snapshots) |
-| `criterion` (dev) | Benchmark harness (ready for future benchmarks) |
+| `insta` (dev) | Snapshot testing (ready for codegen snapshots) |
+| `criterion` (dev) | Benchmark harness (ready for parser/codegen benchmarks) |
 | `tempfile` (dev) | Integration test output directories |
+| `proptest` (dev) | Property-based lexer robustness tests |
+| `rmcp` + `tokio` + `schemars` | MCP server (`pargen-mcp` binary) |
 
 ---
 
@@ -295,11 +300,25 @@ Tests are organized by scope:
 
 1. **Lexer / Parser**: hand-written recursive-descent. Future work could adopt a generated or table-driven approach.
 2. **Error recovery**: parser stops on first error. Multi-error reporting is a future enhancement.
-3. **Options block**: the lexer tokenizes `{ ... }` contents as action blocks; ANTLR4-style `options { ... }` parsing is not yet fully supported.
-4. **MCP server**: a `pargen-mcp` binary exposing `parse_grammar`, `validate_grammar`, and `generate_code` tools is planned.
-5. **Property-based testing**: `proptest` integration for lexer / parser robustness is planned.
-6. **Tree-sitter target**: emitting `grammar.js` from ANTLR4 input is a potential future target.
+3. **Options block**: the lexer tokenizes `{ ... }` contents as action blocks; ANTLR4-style `options { ... }` parsing is partially supported.
+4. **Lexer modes & channels**: lexer `mode` declarations are parsed but not fully reflected in generated parsers.
+5. **Semantic predicates**: `{ ... }?` and `{ ... }^` predicates are parsed into the AST but not enforced by generated parsers.
+6. **`parse` CLI command**: placeholder — requires a generated parser to actually parse input text.
 
 ---
 
-Last updated: 2026-04-27
+## MCP Server (`pargen-mcp`)
+
+The `src/mcp.rs` module exposes five tools over stdio transport:
+
+| Tool | Purpose |
+|------|---------|
+| `parse_grammar` | Parse grammar text, return AST summary |
+| `validate_grammar` | Parse + analyze, return diagnostics |
+| `generate_code` | Full pipeline to any target language |
+| `get_grammar_info` | Detailed rule lists and options |
+| `list_target_languages` | List all 8 supported targets |
+
+---
+
+Last updated: 2026-07-06

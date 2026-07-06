@@ -65,10 +65,6 @@ impl CodeWriter {
         }
     }
 
-    fn raw_line(&mut self, s: &str) {
-        self.lines.push(s.to_string());
-    }
-
     fn blank(&mut self) {
         self.lines.push(String::new());
     }
@@ -86,14 +82,6 @@ impl CodeWriter {
     fn to_string(&self) -> String {
         self.lines.join("\n")
     }
-}
-
-pub(crate) fn format_rule_name(name: &str) -> String {
-    name.to_lowercase()
-}
-
-pub(crate) fn format_token_name(name: &str) -> String {
-    name.to_uppercase()
 }
 
 pub(crate) fn snake_case(name: &str) -> String {

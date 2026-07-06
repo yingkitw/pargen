@@ -18,7 +18,7 @@ enum Commands {
         #[arg(short, long, help = "Path to the .g4 grammar file")]
         grammar: PathBuf,
 
-        #[arg(short, long, help = "Target language (rust, go, typescript, python, java, c, cpp)")]
+        #[arg(short, long, help = "Target language (rust, go, typescript, python, java, c, cpp, treesitter)")]
         lang: String,
 
         #[arg(short, long, help = "Output directory", default_value = ".")]

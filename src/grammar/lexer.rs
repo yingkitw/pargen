@@ -230,10 +230,6 @@ impl G4Lexer {
         Ok(self.tokens)
     }
 
-    fn peek(&self) -> Option<char> {
-        self.input.get(self.pos).copied()
-    }
-
     fn peek_at(&self, offset: usize) -> Option<char> {
         self.input.get(self.pos + offset).copied()
     }
