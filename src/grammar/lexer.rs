@@ -230,6 +230,107 @@ impl G4Lexer {
         Ok(self.tokens)
     }
 
+    /// Tokenize with error recovery. Instead of bailing on the first error,
+    /// collects diagnostics into the returned `Vec<Diagnostic>` and continues
+    /// tokenizing. Unterminated strings / actions / comments emit an EOF
+    /// after recording a diagnostic; unexpected characters are skipped.
+    pub fn tokenize_recover(mut self) -> (Vec<G4Token>, Vec<crate::core::Diagnostic>) {
+        let mut diagnostics: Vec<crate::core::Diagnostic> = Vec::new();
+
+        while self.pos < self.input.len() {
+            if let Err(e) = self.skip_whitespace_and_comments() {
+                if let Some(d) = diagnostic_from_error(&e) {
+                    diagnostics.push(d);
+                }
+                if self.pos >= self.input.len() {
+                    break;
+                }
+            }
+            if self.pos >= self.input.len() {
+                break;
+            }
+
+            let c = self.input[self.pos];
+            let offset = self.pos;
+            let line = self.line;
+            let col = self.col;
+
+            if c == '\'' {
+                match self.read_string_literal() {
+                    Ok(tok) => self.tokens.push(tok),
+                    Err(e) => {
+                        if let Some(d) = diagnostic_from_error(&e) {
+                            diagnostics.push(d);
+                        }
+                        self.recover_to_eof();
+                    }
+                }
+            } else if c == '{' {
+                match self.read_action_block(offset, line, col) {
+                    Ok(tok) => self.tokens.push(tok),
+                    Err(e) => {
+                        if let Some(d) = diagnostic_from_error(&e) {
+                            diagnostics.push(d);
+                        }
+                        self.recover_to_eof();
+                    }
+                }
+            } else if c == '[' {
+                let saved_pos = self.pos;
+                let saved_line = self.line;
+                let saved_col = self.col;
+                let content = self.read_bracket_content();
+                if self.looks_like_charset(&content) {
+                    self.tokens.push(G4Token::new(
+                        G4TokenKind::CharsetContent,
+                        &content,
+                        saved_line,
+                        saved_col,
+                        saved_pos,
+                    ));
+                } else {
+                    self.tokens.push(G4Token::new(G4TokenKind::Lbrack, "[", saved_line, saved_col, saved_pos));
+                    self.tokens.push(G4Token::new(
+                        G4TokenKind::Id,
+                        &content.trim(),
+                        saved_line,
+                        saved_col + 1,
+                        saved_pos + 1,
+                    ));
+                    let end_pos = self.pos - 1;
+                    self.tokens.push(G4Token::new(G4TokenKind::Rbrack, "]", self.line, self.col - 1, end_pos));
+                }
+            } else if c.is_ascii_digit() {
+                let tok = self.read_number(offset, line, col);
+                self.tokens.push(tok);
+            } else if c.is_alphabetic() || c == '_' {
+                let tok = self.read_identifier(offset, line, col);
+                self.tokens.push(tok);
+            } else {
+                match self.read_symbol(offset, line, col) {
+                    Ok(tok) => self.tokens.push(tok),
+                    Err(e) => {
+                        if let Some(d) = diagnostic_from_error(&e) {
+                            diagnostics.push(d);
+                        }
+                        if self.pos < self.input.len() {
+                            self.advance();
+                        }
+                    }
+                }
+            }
+        }
+
+        self.tokens.push(G4Token::eof(self.line, self.col, self.pos));
+        (self.tokens, diagnostics)
+    }
+
+    fn recover_to_eof(&mut self) {
+        while self.pos < self.input.len() {
+            self.advance();
+        }
+    }
+
     fn peek_at(&self, offset: usize) -> Option<char> {
         self.input.get(self.pos + offset).copied()
     }
@@ -583,6 +684,19 @@ impl G4Lexer {
     }
 }
 
+fn diagnostic_from_error(err: &crate::core::Error) -> Option<crate::core::Diagnostic> {
+    use crate::core::Diagnostic;
+    match err {
+        crate::core::Error::Lexer { location, message } => Some(
+            Diagnostic::error(message.clone()).with_location(location.clone())
+        ),
+        crate::core::Error::Parser { location, message } => Some(
+            Diagnostic::error(message.clone()).with_location(location.clone())
+        ),
+        _ => Some(Diagnostic::error(err.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,5 +988,44 @@ mod tests {
             assert_eq!(tokens[2].kind, G4TokenKind::Semi);
             assert_eq!(tokens[3].kind, G4TokenKind::Eof);
         }
+    }
+
+    #[test]
+    fn test_recover_skips_unexpected_char() {
+        let (tokens, diags) = G4Lexer::new("grammar Test; %").tokenize_recover();
+        assert!(!diags.is_empty(), "expected at least one diagnostic for '%'");
+        assert_eq!(
+            tokens.last().unwrap().kind,
+            G4TokenKind::Eof,
+            "tokenization should finish with EOF"
+        );
+    }
+
+    #[test]
+    fn test_recover_collects_multiple_diagnostics() {
+        let (tokens, diags) = G4Lexer::new("grammar Test; % & \\").tokenize_recover();
+        assert!(
+            diags.len() >= 2,
+            "expected 2+ diagnostics, got {} ({:?})",
+            diags.len(),
+            diags
+        );
+        assert_eq!(tokens.last().unwrap().kind, G4TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_recover_unterminated_string_records_diagnostic() {
+        let (_tokens, diags) = G4Lexer::new("grammar Test; 'oops").tokenize_recover();
+        assert!(
+            diags.iter().any(|d| d.message.contains("string")),
+            "expected string diagnostic, got {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn test_recover_clean_input_has_no_diagnostics() {
+        let (_tokens, diags) = G4Lexer::new("grammar Test; start: EOF;").tokenize_recover();
+        assert!(diags.is_empty(), "expected no diagnostics, got {:?}", diags);
     }
 }

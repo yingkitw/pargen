@@ -185,3 +185,52 @@ fn snapshot_simple_cpp() {
 fn snapshot_simple_treesitter() {
     insta::assert_snapshot!(generate_source("treesitter"));
 }
+
+fn modes_grammar() -> &'static str {
+    r#"grammar StringTest;
+
+start: STR;
+WS: [ \t\r\n]+ -> skip;
+fragment LETTER: [a-zA-Z];
+
+mode STRINGS;
+STR_CHAR: ~'"';
+STR_END: '"' -> popMode;
+STR_START: '"' -> pushMode(STRINGS);
+"#
+}
+
+#[test]
+fn test_rust_codegen_emits_lexer_mode_enum() {
+    let grammar = parse_grammar_source(modes_grammar()).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    generate(grammar, "rust", temp_dir.path().to_str().unwrap()).unwrap();
+    let content = std::fs::read_to_string(temp_dir.path().join("stringtest_parser.rs")).unwrap();
+    assert!(content.contains("pub enum StringTestLexerMode"), "expected LexerMode enum, got: {}", content);
+    assert!(content.contains("DEFAULT_MODE"), "expected DEFAULT_MODE variant");
+    assert!(content.contains("STRINGS"), "expected STRINGS variant");
+    assert!(content.contains("mode: StringTestLexerMode"), "expected mode field on Lexer");
+    assert!(content.contains("self.mode = StringTestLexerMode::STRINGS"), "expected mode switch on STR_START");
+    assert!(content.contains("self.mode = StringTestLexerMode::DEFAULT_MODE"), "expected mode switch on STR_END");
+}
+
+#[test]
+fn test_rust_codegen_routes_modes_in_dispatch() {
+    let grammar = parse_grammar_source(modes_grammar()).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    generate(grammar, "rust", temp_dir.path().to_str().unwrap()).unwrap();
+    let content = std::fs::read_to_string(temp_dir.path().join("stringtest_parser.rs")).unwrap();
+    assert!(content.contains("fn try_match_mode_default_mode"), "expected default mode dispatch");
+    assert!(content.contains("fn try_match_mode_strings"), "expected strings mode dispatch");
+    assert!(content.contains("match self.mode"), "expected mode match in tokenize");
+}
+
+#[test]
+fn test_other_targets_still_generate_with_modes() {
+    let grammar = parse_grammar_source(modes_grammar()).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().to_str().unwrap();
+    for lang in ["go", "typescript", "python", "java", "c", "cpp", "treesitter"] {
+        generate(grammar.clone(), lang, path).expect(&format!("{lang} failed with modes grammar"));
+    }
+}

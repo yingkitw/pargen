@@ -35,16 +35,22 @@ pub struct SimpleToken {
     pub col: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimpleLexerMode {
+    DEFAULT_MODE,
+}
+
 pub struct SimpleLexer {
     input: Vec<char>,
     pos: usize,
     line: usize,
     col: usize,
+    mode: SimpleLexerMode,
 }
 
 impl SimpleLexer {
     pub fn new(input: &str) -> Self {
-        Self { input: input.chars().collect(), pos: 0, line: 1, col: 1 }
+        Self { input: input.chars().collect(), pos: 0, line: 1, col: 1, mode: SimpleLexerMode::DEFAULT_MODE }
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<SimpleToken>, SimpleLexError> {
@@ -55,11 +61,9 @@ impl SimpleLexer {
                 self.advance();
                 continue;
             }
-            if let Some(token) = self.try_match_i_d() {
-                tokens.push(token);
-                continue;
-            }
-            if let Some(token) = self.try_match_h_e_l_l_o() {
+            if let Some(token) = match self.mode {
+                SimpleLexerMode::DEFAULT_MODE => self.try_match_mode_default_mode(),
+            } {
                 tokens.push(token);
                 continue;
             }
@@ -135,6 +139,13 @@ impl SimpleLexer {
         for _ in target.chars() { self.advance(); }
         let text = self.input[saved_pos..self.pos].iter().collect::<String>();
         Some(self.make_token(SimpleTokenKind::HELLO, text, saved_line, saved_col))
+    }
+
+    fn try_match_mode_default_mode(&mut self) -> Option<SimpleToken> {
+        if let Some(token) = self.try_match_i_d() {
+            return Some(token);
+        }
+        None
     }
 
 }

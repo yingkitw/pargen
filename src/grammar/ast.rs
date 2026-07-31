@@ -38,7 +38,43 @@ impl Grammar {
         }
         names
     }
+
+    /// Return the names of all lexer modes referenced by this grammar,
+    /// including the implied default mode (`DEFAULT_MODE`). Order is
+    /// stable: default first, then named modes in alphabetical order.
+    pub fn lexer_modes(&self) -> Vec<String> {
+        use std::collections::BTreeSet;
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for rule in &self.rules {
+            if let Some(m) = &rule.mode {
+                named.insert(m.clone());
+            }
+            for cmd in &rule.commands {
+                if matches!(cmd.name.as_str(), "pushMode" | "mode") {
+                    if let Some(arg) = &cmd.arg {
+                        named.insert(arg.clone());
+                    }
+                }
+            }
+        }
+        let mut out = vec![DEFAULT_MODE.to_string()];
+        out.extend(named);
+        out
+    }
+
+    /// Return the lexer rules belonging to a given mode (`None` for
+    /// the default mode).
+    pub fn lexer_rules_in_mode(&self, mode: Option<&str>) -> Vec<&Rule> {
+        self.rules
+            .iter()
+            .filter(|r| r.is_lexer_rule() && r.mode.as_deref() == mode)
+            .collect()
+    }
 }
+
+/// Name of the implicit default lexer mode used for rules that are not
+/// declared inside any `mode NAME;` block.
+pub const DEFAULT_MODE: &str = "DEFAULT_MODE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GrammarKind {
@@ -64,6 +100,8 @@ pub struct Rule {
     pub throws: Vec<String>,
     pub alternatives: Vec<Alternative>,
     pub commands: Vec<LexerCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 impl Rule {
@@ -314,6 +352,26 @@ impl LexerCommand {
     pub fn mode(name: &str) -> Self {
         Self::new("mode", Some(name.to_string()))
     }
+
+    /// Return the target mode name if this command switches modes, else
+    /// `None`. Recognises `pushMode(...)`, `popMode` (resets to default),
+    /// and `mode(...)`.
+    pub fn mode_target(&self) -> Option<ModeTarget> {
+        match self.name.as_str() {
+            "pushMode" | "mode" => self.arg.as_ref().map(|s| ModeTarget::Named(s.clone())),
+            "popMode" => Some(ModeTarget::Default),
+            _ => None,
+        }
+    }
+}
+
+/// How a lexer command changes the current mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModeTarget {
+    /// Switch to the named mode.
+    Named(String),
+    /// Switch back to the implicit default mode.
+    Default,
 }
 
 #[derive(Debug)]

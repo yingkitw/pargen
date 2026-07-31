@@ -81,6 +81,25 @@ strip = true
 - `G4Lexer::tokenize()` and `G4Parser::parse()` now return `crate::core::Result<>` with proper error types
 - `lib.rs` uses `?` propagation directly without `map_err` wrappers
 
+### [x] 15. Error Recovery & Multi-Error Reporting
+- `Diagnostic` now has an optional `note` field for fix-it hints
+- `ErrorBag` collects multiple `Diagnostic`s; `Error::Multiple { diagnostics }` wraps a bag
+- `G4Lexer::tokenize_recover()` returns `(Vec<G4Token>, Vec<Diagnostic>)` — skips unexpected chars, emits EOF on unterminated tokens
+- `G4Parser::parse_recover()` returns `(Option<Grammar>, Vec<Diagnostic>)` — syncs to next `;` after each failed rule
+- `parse_grammar_source_detailed(source)` is the public multi-error entry point
+- CLI `check` and `generate` print every diagnostic with severity + location + note
+- MCP `validate_grammar` returns the full `diagnostics` array (not just the first error)
+
+### [x] 16. Lexer Modes Code Generation
+- `Rule::mode: Option<String>` tracks which mode each rule belongs to
+- `Grammar::lexer_modes()` lists all modes (default + named, sorted)
+- `Grammar::lexer_rules_in_mode(mode)` groups rules by mode
+- `LexerCommand::mode_target()` returns `ModeTarget::Named` or `ModeTarget::Default`
+- Parser tracks `current_mode` across `mode NAME;` blocks; recovery version handles partial mode declarations
+- Rust target emits a `LexerMode` enum, a `mode` field on the lexer, and per-mode `try_match_mode_<name>` dispatch functions
+- `pushMode(NAME)`, `popMode`, `mode(NAME)` translate to `self.mode = LexerMode::NAME` after a token matches
+- Other targets still treat all rules as default-mode (channel support still un-emitted)
+
 ## Completed
 
 - [x] 1. Upgrade to Rust Edition 2024
@@ -97,14 +116,16 @@ strip = true
 - [x] 12. Property-based testing with `proptest` (lexer robustness)
 - [x] 13. Tree-sitter grammar generator (`treesitter` codegen target)
 - [x] 14. Error Diagnostics with Locations (lexer/parser return `crate::core::Result`)
+- [x] 15. Error Recovery & Multi-Error Reporting (ErrorBag, tokenize_recover, parse_recover, parse_grammar_source_detailed)
+- [x] 16. Lexer Modes Code Generation (Rule::mode, Grammar::lexer_modes(), Rust mode-aware LexerMode dispatch)
 
-**Test Summary**: 116 tests passing
-- 28 lexer unit tests (includes 4 proptests)
-- 27 parser unit tests
-- 8 left-recursion unit tests
-- 13 core error unit tests
-- 22 integration tests (8 languages)
-- 18 codegen tests (10 structure + 8 insta snapshots)
+**Test Summary**: 148 tests passing (was 137; +11 for lexer modes)
+- 31 lexer unit tests (includes 4 proptests + 4 recovery)
+- 39 parser unit tests (includes 5 recovery + 5 mode parsing)
+- 7 left-recursion unit tests
+- 20 core error unit tests (includes ErrorBag + Diagnostic builders)
+- 30 integration tests (8 languages + 5 detailed parsing + 3 mode helpers)
+- 21 codegen tests (10 structure + 8 insta snapshots + 3 mode codegen)
 
 ---
 
@@ -114,9 +135,9 @@ Compared against ANTLR4, LALRPOP, Pest, and Tree-sitter. Prioritized by competit
 
 ### High Value
 
-- [ ] **Error recovery & multi-error reporting** — Pest and ANTLR report multiple parse errors with suggestions; pargen stops on first error. Critical for grammar authoring UX.
+- [x] **Error recovery & multi-error reporting** — Added `Diagnostic::note`, `ErrorBag`, `Error::Multiple`, `tokenize_recover`, `parse_recover`, and `parse_grammar_source_detailed`. Parser syncs to next `;` after a failed rule. CLI `check`/`generate` and MCP `validate_grammar` print every diagnostic with severity + location + note.
 - [x] **Codegen snapshot tests with `insta`** — 8 snapshot tests lock generated output per language for the simple grammar.
-- [ ] **Lexer modes code generation** — ANTLR modes are parsed into AST but not emitted. Needed for real-world grammars (e.g., string/comment states).
+- [x] **Lexer modes code generation** — Added `Rule::mode`, `Grammar::lexer_modes()`, `Grammar::lexer_rules_in_mode()`, `LexerCommand::mode_target()`. Parser tracks `current_mode` across `mode NAME;` blocks. Rust target emits a `LexerMode` enum, a `mode` field, and per-mode dispatch functions with `pushMode`/`popMode`/`mode` command handling. Tests cover mode parsing, default vs. named mode assignment, and codegen output.
 - [ ] **Semantic predicate enforcement** — `{ ... }?` / `{ ... }^` predicates are in AST but ignored by codegen. ANTLR's key differentiator for context-sensitive grammars.
 - [ ] **Visitor / listener pattern generation** — ANTLR auto-generates tree walkers. High demand for compiler pipelines built on generated parsers.
 
@@ -140,4 +161,4 @@ Compared against ANTLR4, LALRPOP, Pest, and Tree-sitter. Prioritized by competit
 
 ---
 
-Last updated: 2026-07-06
+Last updated: 2026-07-31

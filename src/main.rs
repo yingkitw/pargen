@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use pargen::Diagnostic;
 use std::path::PathBuf;
-use tracing::{info, debug};
+use std::process::ExitCode;
+use tracing::{info, debug, warn};
 
 #[derive(Parser)]
 #[command(name = "pargen")]
@@ -47,11 +49,21 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
 
+    match run(cli) {
+        Ok(exit_code) => exit_code,
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Commands::Generate {
             grammar,
@@ -59,10 +71,19 @@ fn main() -> Result<()> {
             output,
         } => {
             let grammar_path = grammar.to_string_lossy().to_string();
-            let grammar_ast = pargen::parse_grammar_file(&grammar_path)?;
+            let source = std::fs::read_to_string(&grammar_path)?;
+            let (grammar_ast, diagnostics) = pargen::parse_grammar_source_detailed(&source);
+            let had_errors = print_diagnostics(&diagnostics);
+            let grammar_ast = match grammar_ast {
+                Some(g) => g,
+                None => {
+                    anyhow::bail!("Grammar could not be recovered; see diagnostics above");
+                }
+            };
             let output_str = output.to_string_lossy().to_string();
             pargen::generate(grammar_ast, &lang, &output_str)?;
             info!("Generated {} parser in {}", lang, output_str);
+            Ok(exit_code_for(had_errors))
         }
         Commands::Init { name, output } => {
             let grammar_content = format!(
@@ -80,6 +101,7 @@ start: EOF;
             let grammar_file = output_dir.join(format!("{}.g4", name));
             std::fs::write(&grammar_file, &grammar_content)?;
             info!("Created grammar file: {}", grammar_file.display());
+            Ok(ExitCode::from(0))
         }
         Commands::Parse {
             grammar,
@@ -92,11 +114,20 @@ start: EOF;
             debug!("Input: {}", input);
             debug!("Format: {}", format);
             info!("Note: Parsing requires the generated parser. Use 'pargen generate' first.");
+            Ok(ExitCode::from(0))
         }
         Commands::Check { grammar } => {
             let grammar_path = grammar.to_string_lossy().to_string();
-            let grammar_ast = pargen::parse_grammar_file(&grammar_path)?;
-            info!("Grammar '{}' parsed successfully", grammar_ast.name);
+            let source = std::fs::read_to_string(&grammar_path)?;
+            let (grammar_ast, diagnostics) = pargen::parse_grammar_source_detailed(&source);
+            let had_errors = print_diagnostics(&diagnostics);
+            let grammar_ast = match grammar_ast {
+                Some(g) => g,
+                None => {
+                    anyhow::bail!("Grammar header could not be parsed; aborting");
+                }
+            };
+            info!("Grammar '{}' parsed (with possible recovery)", grammar_ast.name);
             info!("  Lexer rules: {}", grammar_ast.lexer_rules().len());
             info!("  Parser rules: {}", grammar_ast.parser_rules().len());
             for rule in &grammar_ast.rules {
@@ -104,8 +135,35 @@ start: EOF;
                 let skip = if rule.is_skip() { " (skip)" } else { "" };
                 debug!("  [{}] {}{} ({} alternatives)", kind, rule.name, skip, rule.alternatives.len());
             }
+            Ok(exit_code_for(had_errors))
         }
     }
+}
 
-    Ok(())
+fn print_diagnostics(diagnostics: &[Diagnostic]) -> bool {
+    let mut had_errors = false;
+    for d in diagnostics {
+        if matches!(d.severity, pargen::DiagnosticSeverity::Error) {
+            had_errors = true;
+        }
+        match &d.location {
+            Some(loc) => eprintln!("{}: {}: {}", d.severity, loc, d.message),
+            None => eprintln!("{}: {}", d.severity, d.message),
+        }
+        if let Some(note) = &d.note {
+            eprintln!("  = note: {}", note);
+        }
+    }
+    if had_errors {
+        warn!("Grammar has errors; generation may fail");
+    }
+    had_errors
+}
+
+fn exit_code_for(had_errors: bool) -> ExitCode {
+    if had_errors {
+        ExitCode::from(1)
+    } else {
+        ExitCode::from(0)
+    }
 }

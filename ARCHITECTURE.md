@@ -57,13 +57,17 @@ src/
    ▼
 ┌─────────────┐
 │   Lexer     │  G4Lexer::new(source).tokenize()
-│  (grammar)  │  → Vec<G4Token>
+│  (grammar)  │  → Vec<G4Token>                       (strict mode)
+│             │  G4Lexer::new(source).tokenize_recover()
+│             │  → (Vec<G4Token>, Vec<Diagnostic>)   (recovery mode)
 └─────────────┘
    │
    ▼
 ┌─────────────┐
 │   Parser    │  G4Parser::new(tokens).parse()
-│  (grammar)  │  → Grammar AST
+│  (grammar)  │  → Grammar AST                       (strict mode)
+│             │  G4Parser::new(tokens).parse_recover()
+│             │  → (Option<Grammar>, Vec<Diagnostic>) (recovery mode)
 └─────────────┘
    │
    ▼
@@ -82,6 +86,25 @@ src/
  output file
 ```
 
+### Error Recovery
+
+The strict entry points (`tokenize`, `parse`) return the first error and
+stop. The recovery entry points (`tokenize_recover`, `parse_recover`)
+collect every diagnostic and continue as far as they can:
+
+- **Lexer** skips an unexpected character and records a diagnostic;
+  unterminated strings / actions / comments produce a diagnostic and
+  emit an EOF so the parser still has a token stream.
+- **Parser** synchronizes to the next `;` after a failed rule, emits a
+  partial rule (with empty alternatives) so the outer loop can keep
+  going, and records a diagnostic for each failure.
+
+`lib::parse_grammar_source_detailed(source)` ties both passes together and
+returns `(Option<Grammar>, Vec<Diagnostic>)`. The grammar is `None` only
+when the header itself could not be parsed. The CLI `check` and `generate`
+commands use this API; their output lists every diagnostic with severity,
+location, and note.
+
 ---
 
 ## Core Types
@@ -97,24 +120,31 @@ pub enum Error {
     Codegen(String),
     UnsupportedLanguage(String),
     ValidationFailed { count: usize },
+    Multiple { diagnostics: ErrorBag },
 }
 ```
 
 - `SourceLocation` tracks `(line, column, file)` and serializes cleanly.
-- `Diagnostic` pairs a `DiagnosticSeverity` with a message and optional location.
+- `Diagnostic` pairs a `DiagnosticSeverity` with a message, an optional `SourceLocation`, and an optional `note` for fix-it hints.
+- `ErrorBag` collects multiple `Diagnostic`s. It is the engine behind multi-error reporting — `Error::Multiple` wraps it; `to_error()` collapses a bag of one diagnostic into a single `Error::Parser` for ergonomic single-error use.
+- Expected items use `Diagnostic::error(msg).at(line, col).with_note("expected …")` to attach context.
 
 ### AST (`grammar::ast`)
 
 | Type | Purpose |
 |------|---------|
 | `Grammar` | Root container: name, kind, options, rules |
-| `Rule` | Single rule with alternatives, modifiers (fragment, skip, channel) |
+| `Rule` | Single rule with alternatives, modifiers (fragment, skip, channel), mode |
 | `Alternative` | One branch of a rule (`\|`-separated) |
 | `Element` | One item inside an alternative (rule ref, token ref, literal, charset, etc.) |
-| `ElementKind` | Enum: `RuleRef`, `TokenRef`, `Literal`, `CharSet`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Group`, `Dot`, `Range`, `Predicate` |
+| `ElementKind` | Enum: `RuleRef`, `TokenRef`, `Literal`, `CharSet`, `Optional`, `ZeroOrMore`, `Group`, `Dot`, `Range`, `Predicate` |
 | `CharSetDef` | Character set definition: list of `CharRange` + negation flag |
+| `LexerCommand` | Lexer-side action: `skip`, `channel(NAME)`, `pushMode(NAME)`, `popMode`, `mode(NAME)` |
+| `ModeTarget` | Return type of `LexerCommand::mode_target()` — `Named(String)` or `Default` |
 
 All AST types implement `Debug`, `Clone`, `PartialEq`, `Serialize`, `Deserialize`.
+
+`Grammar::lexer_modes()` returns every mode referenced (default + named, sorted) and `Grammar::lexer_rules_in_mode(mode)` returns the lexer rules belonging to a given mode. `DEFAULT_MODE` is the implicit mode for rules outside any `mode NAME;` block.
 
 ### ProcessedGrammar (`analysis::first_follow`)
 
@@ -180,6 +210,20 @@ String literals used directly in parser rules (e.g., `'+'`, `'if'`) are collecte
 
 ---
 
+## Lexer Modes
+
+Modes are tracked on `Rule::mode` (an `Option<String>`). The parser keeps a
+`current_mode` cursor that updates when it sees `mode NAME;`; each
+subsequent rule inherits that mode. `Grammar::lexer_modes()` is the
+canonical list of modes (default + any named modes referenced by rules
+or by `pushMode`/`mode` commands).
+
+The Rust target emits a `LexerMode` enum, a `mode` field on the lexer,
+and a `match self.mode` dispatch in `tokenize` that routes to a per-mode
+`try_match_mode_<name>` function. After a rule matches, the dispatch
+applies the rule's lexer commands — `pushMode(NAME)` and `mode(NAME)`
+set `self.mode = LexerMode::NAME`; `popMode` resets to `DEFAULT_MODE`.
+
 ## Code Generation (`codegen`)
 
 ### `CodeGenerator` Trait
@@ -233,17 +277,18 @@ let code = w.to_string();
 ## Public API (`lib.rs`)
 
 ```rust
-pub use core::{Error, Result, Diagnostic, DiagnosticSeverity};
+pub use core::{Error, Result, Diagnostic, DiagnosticSeverity, SourceLocation, ErrorBag};
 pub use core::{GrammarParser, SemanticAnalyzer, CodeGenerator};
 pub use grammar::{Grammar, GrammarKind, Rule, Alternative, Element, ElementKind};
 pub use analysis::ProcessedGrammar;
 
 pub fn parse_grammar_file(path: &str) -> anyhow::Result<Grammar>;
 pub fn parse_grammar_source(source: &str) -> anyhow::Result<Grammar>;
+pub fn parse_grammar_source_detailed(source: &str) -> (Option<Grammar>, Vec<Diagnostic>);
 pub fn generate(grammar: Grammar, lang: &str, output_dir: &str) -> anyhow::Result<()>;
 ```
 
-These three functions are the primary programmatic interface. `parse_grammar_source` is especially useful for tests.
+These functions are the primary programmatic interface. `parse_grammar_source` is the strict entry point; `parse_grammar_source_detailed` is the recovery entry point — it returns the partial grammar plus every diagnostic, never `Err`.
 
 ---
 
@@ -268,14 +313,14 @@ Tests are organized by scope:
 
 | Test File | Count | Scope |
 |-----------|-------|-------|
-| `src/grammar/lexer.rs` (`#[cfg(test)]`) | 28 | Token kinds, literals, comments, errors, proptests |
-| `src/grammar/parser.rs` (`#[cfg(test)]`) | 27 | Grammar headers, rules, alternatives, labels, actions, fragments, error cases |
-| `src/analysis/left_rec.rs` (`#[cfg(test)]`) | 8 | Direct/indirect left recursion, empty alternatives |
-| `src/core/error.rs` (`#[cfg(test)]`) | 13 | Display, IO conversion, serde round-trip, clone/equality |
-| `tests/integration_test.rs` | 22 | End-to-end parse + generate for all 8 targets, error cases |
-| `tests/codegen_test.rs` | 18 | Structure verification + insta snapshots per language |
+| `src/grammar/lexer.rs` (`#[cfg(test)]`) | 31 | Token kinds, literals, comments, errors, proptests, recovery |
+| `src/grammar/parser.rs` (`#[cfg(test)]`) | 39 | Grammar headers, rules, alternatives, labels, actions, fragments, error cases, recovery, modes |
+| `src/analysis/left_rec.rs` (`#[cfg(test)]`) | 7 | Direct/indirect left recursion, empty alternatives |
+| `src/core/error.rs` (`#[cfg(test)]`) | 20 | Display, IO conversion, serde round-trip, clone/equality, ErrorBag + Diagnostic builders |
+| `tests/integration_test.rs` | 30 | End-to-end parse + generate for all 8 targets, error cases, `parse_grammar_source_detailed`, mode helpers |
+| `tests/codegen_test.rs` | 21 | Structure verification + insta snapshots per language, mode-aware Rust codegen |
 
-**116 tests total**, all run with `cargo test`.
+**148 tests total**, all run with `cargo test`.
 
 ---
 
@@ -299,11 +344,10 @@ Tests are organized by scope:
 ## Known Limitations & Extension Points
 
 1. **Lexer / Parser**: hand-written recursive-descent. Future work could adopt a generated or table-driven approach.
-2. **Error recovery**: parser stops on first error. Multi-error reporting is a future enhancement.
-3. **Options block**: the lexer tokenizes `{ ... }` contents as action blocks; ANTLR4-style `options { ... }` parsing is partially supported.
-4. **Lexer modes & channels**: lexer `mode` declarations are parsed but not fully reflected in generated parsers.
-5. **Semantic predicates**: `{ ... }?` and `{ ... }^` predicates are parsed into the AST but not enforced by generated parsers.
-6. **`parse` CLI command**: placeholder — requires a generated parser to actually parse input text.
+2. **Options block**: the lexer tokenizes `{ ... }` contents as action blocks; ANTLR4-style `options { ... }` parsing is partially supported.
+3. **Lexer modes & channels**: lexer `mode` declarations are parsed and the Rust target emits mode-aware dispatch. The other 7 targets still treat all rules as default-mode. Channel support (e.g. `-> channel(HIDDEN)`) is still read into the AST but not emitted.
+4. **Semantic predicates**: `{ ... }?` and `{ ... }^` predicates are parsed into the AST but not enforced by generated parsers.
+5. **`parse` CLI command**: placeholder — requires a generated parser to actually parse input text.
 
 ---
 
@@ -321,4 +365,4 @@ The `src/mcp.rs` module exposes five tools over stdio transport:
 
 ---
 
-Last updated: 2026-07-06
+Last updated: 2026-07-31

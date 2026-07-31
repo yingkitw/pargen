@@ -14,9 +14,11 @@
 
 ## Non-Goals
 
-- Full ANTLR4 feature parity (visitor/listener, channels, lexer modes, semantic predicates).
+- Full ANTLR4 feature parity (visitor/listener, channels, semantic predicates).
 - Incremental or error-tolerant parsing in generated parsers.
 - Building a full compiler pipeline (type checking, optimization, code emission beyond parsers).
+
+Note: as of v0.1.x, lexer modes ARE supported in the Rust target (other targets treat all rules as default-mode).
 
 ## Technical Stack
 
@@ -48,11 +50,12 @@ Each target implements the `CodeGenerator` trait. Output is written to `{grammar
 
 ## Quality Bar
 
-- All changes must pass `cargo test` (currently 116 tests).
+- All changes must pass `cargo test` (currently 148 tests).
 - New codegen targets require integration tests in `tests/`.
 - New lexer/parser behavior requires unit tests alongside the component.
 - Public API changes must be reflected in `README.md` and `ARCHITECTURE.md`.
 - Structured errors must include source location (line, column) where applicable.
+- Diagnostics may include a `note` for fix-it hints.
 
 ## CLI Commands
 
@@ -88,4 +91,4 @@ Each target implements the `CodeGenerator` trait. Output is written to `{grammar
 
 ---
 
-Last updated: 2026-07-06
+Last updated: 2026-07-31

@@ -117,47 +117,43 @@ impl PargenServer {
         &self,
         params: Parameters<ValidateGrammarRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match crate::parse_grammar_source(&params.0.grammar_text) {
-            Ok(grammar) => {
-                match ProcessedGrammar::process(grammar) {
-                    Ok(_) => {
-                        let result = serde_json::json!({
-                            "success": true,
-                            "has_errors": false,
-                            "has_warnings": false,
-                            "diagnostics": []
-                        });
-                        Ok(CallToolResult::success(vec![Content::json(result)?]))
-                    }
-                    Err(e) => {
-                        let result = serde_json::json!({
-                            "success": false,
-                            "has_errors": true,
-                            "has_warnings": false,
-                            "error": format!("{}", e),
-                            "diagnostics": [{
-                                "severity": "Error",
-                                "message": format!("{}", e)
-                            }]
-                        });
-                        Ok(CallToolResult::success(vec![Content::json(result)?]))
-                    }
-                }
-            }
-            Err(e) => {
-                let result = serde_json::json!({
-                    "success": false,
-                    "has_errors": true,
-                    "has_warnings": false,
-                    "error": format!("Parse error: {}", e),
-                    "diagnostics": [{
-                        "severity": "Error",
-                        "message": format!("{}", e)
-                    }]
-                });
-                Ok(CallToolResult::success(vec![Content::json(result)?]))
-            }
-        }
+        let (grammar, diagnostics) = crate::parse_grammar_source_detailed(&params.0.grammar_text);
+        let has_errors = diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, crate::core::DiagnosticSeverity::Error));
+        let has_warnings = diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, crate::core::DiagnosticSeverity::Warning));
+
+        let diagnostics_json: Vec<_> = diagnostics
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "severity": format!("{:?}", d.severity),
+                    "message": d.message,
+                    "line": d.location.as_ref().map(|l| l.line),
+                    "column": d.location.as_ref().map(|l| l.column),
+                    "note": d.note,
+                })
+            })
+            .collect();
+
+        let grammar_name = grammar.as_ref().map(|g| g.name.clone());
+        let recoverable = grammar.is_some();
+        let analysis_ok = grammar
+            .map(ProcessedGrammar::process)
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+        let success = recoverable && analysis_ok && !has_errors;
+        let result = serde_json::json!({
+            "success": success,
+            "recoverable": recoverable,
+            "grammar_name": grammar_name,
+            "has_errors": has_errors,
+            "has_warnings": has_warnings,
+            "diagnostics": diagnostics_json,
+        });
+        Ok(CallToolResult::success(vec![Content::json(result)?]))
     }
 
     /// Generate parser code from a grammar specification

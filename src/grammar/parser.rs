@@ -1,4 +1,4 @@
-use crate::core::Error;
+use crate::core::{Diagnostic, DiagnosticSeverity, Error};
 use crate::grammar::ast::*;
 use crate::grammar::lexer::{G4Token, G4TokenKind};
 
@@ -25,6 +25,457 @@ impl G4Parser {
             ));
         }
         Ok(grammar)
+    }
+
+    /// Parse with error recovery. Returns the partial grammar and a
+    /// list of collected diagnostics. The grammar is `None` if the
+    /// header itself could not be parsed.
+    pub fn parse_recover(self) -> (Option<Grammar>, Vec<Diagnostic>) {
+        let mut parser = self;
+        let mut diagnostics = Vec::new();
+        let grammar = parser.parse_grammar_recover(&mut diagnostics);
+        if !parser.at_end() {
+            let tok = parser.current().clone();
+            diagnostics.push(
+                Diagnostic::error(format!(
+                    "Unexpected token {:?} ('{}'), expected end of input",
+                    tok.kind, tok.text
+                ))
+                .at(tok.line, tok.col)
+                .with_note("trailing input after last rule"),
+            );
+        }
+        (grammar, diagnostics)
+    }
+
+    fn parse_grammar_recover(&mut self, diagnostics: &mut Vec<Diagnostic>) -> Option<Grammar> {
+        let mut kind = GrammarKind::Combined;
+        if self.peek_kind() == G4TokenKind::Lexer {
+            self.advance();
+            kind = GrammarKind::Lexer;
+        } else if self.peek_kind() == G4TokenKind::Parser {
+            self.advance();
+            kind = GrammarKind::Parser;
+        }
+
+        if self.expect_recover(G4TokenKind::Grammar, diagnostics).is_none() {
+            return None;
+        }
+        let name_tok = self.expect_recover(G4TokenKind::Id, diagnostics)?;
+        let name = name_tok.text;
+        if self.expect_recover(G4TokenKind::Semi, diagnostics).is_none() {
+            return None;
+        }
+
+        let mut grammar = Grammar {
+            name,
+            kind,
+            options: std::collections::HashMap::new(),
+            token_specs: Vec::new(),
+            channel_specs: Vec::new(),
+            actions: Vec::new(),
+            rules: Vec::new(),
+        };
+
+        let mut current_mode: Option<String> = None;
+
+        while !self.at_end() {
+            match self.peek_kind() {
+                G4TokenKind::Options => {
+                    if self.parse_options_recover(&mut grammar, diagnostics).is_none() {
+                        self.sync_to_statement(diagnostics);
+                    }
+                }
+                G4TokenKind::Tokens => {
+                    if self.parse_tokens_recover(&mut grammar, diagnostics).is_none() {
+                        self.sync_to_statement(diagnostics);
+                    }
+                }
+                G4TokenKind::Channels => {
+                    if self.parse_channels_recover(&mut grammar, diagnostics).is_none() {
+                        self.sync_to_statement(diagnostics);
+                    }
+                }
+                G4TokenKind::Import => {
+                    if self.parse_import_recover(diagnostics).is_none() {
+                        self.sync_to_statement(diagnostics);
+                    }
+                }
+                G4TokenKind::At => {
+                    if self.parse_action_recover(&mut grammar, diagnostics).is_none() {
+                        self.sync_to_statement(diagnostics);
+                    }
+                }
+                G4TokenKind::Mode => match self.parse_mode_recover(diagnostics) {
+                    Some(name) => current_mode = Some(name),
+                    None => self.sync_to_statement(diagnostics),
+                },
+                _ => match self.parse_rule_recover(diagnostics) {
+                    Some(mut rule) => {
+                        rule.mode = current_mode.clone();
+                        grammar.rules.push(rule);
+                    }
+                    None => self.sync_to_statement(diagnostics),
+                },
+            }
+        }
+
+        Some(grammar)
+    }
+
+    fn expect_recover(
+        &mut self,
+        kind: G4TokenKind,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<G4Token> {
+        if self.peek_kind() == kind {
+            Some(self.advance())
+        } else {
+            let tok = self.current().clone();
+            diagnostics.push(
+                Diagnostic::error(format!(
+                    "Expected {} but found {:?} ('{}')",
+                    kind, tok.kind, tok.text
+                ))
+                .at(tok.line, tok.col)
+                .with_note(format!("expected {}", kind)),
+            );
+            None
+        }
+    }
+
+    fn sync_to_statement(&mut self, diagnostics: &mut Vec<Diagnostic>) {
+        while !self.at_end() && self.peek_kind() != G4TokenKind::Semi {
+            self.advance();
+        }
+        if self.peek_kind() == G4TokenKind::Semi {
+            self.advance();
+        } else if !self.at_end() {
+            // Stuck on a malformed rule; advance one token to make progress.
+            self.advance();
+            let tok = self.current().clone();
+            diagnostics.push(
+                Diagnostic::warning("unable to synchronize; advanced past unexpected token")
+                    .at(tok.line, tok.col),
+            );
+        }
+    }
+
+    fn parse_options_recover(
+        &mut self,
+        grammar: &mut Grammar,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<()> {
+        if self.expect_recover(G4TokenKind::Options, diagnostics).is_none() {
+            return None;
+        }
+        if self.expect_recover(G4TokenKind::Lbrace, diagnostics).is_none() {
+            return None;
+        }
+        while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
+            let key = self.expect_recover(G4TokenKind::Id, diagnostics)?;
+            if self.expect_recover(G4TokenKind::Assign, diagnostics).is_none() {
+                return None;
+            }
+            let value = match self.peek_kind() {
+                G4TokenKind::Id | G4TokenKind::StringLit | G4TokenKind::IntLit => {
+                    self.advance().text
+                }
+                _ => {
+                    let tok = self.current().clone();
+                    diagnostics.push(
+                        Diagnostic::error("expected option value")
+                            .at(tok.line, tok.col),
+                    );
+                    return None;
+                }
+            };
+            if self.expect_recover(G4TokenKind::Semi, diagnostics).is_none() {
+                return None;
+            }
+            grammar.options.insert(key.text, value);
+        }
+        self.expect_recover(G4TokenKind::Rbrace, diagnostics)?;
+        Some(())
+    }
+
+    fn parse_tokens_recover(
+        &mut self,
+        grammar: &mut Grammar,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<()> {
+        if self.expect_recover(G4TokenKind::Tokens, diagnostics).is_none() {
+            return None;
+        }
+        if self.expect_recover(G4TokenKind::Lbrace, diagnostics).is_none() {
+            return None;
+        }
+        while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
+            let id = self.expect_recover(G4TokenKind::Id, diagnostics)?;
+            grammar.token_specs.push(id.text);
+            let _ = self.match_kind(G4TokenKind::Comma);
+        }
+        self.expect_recover(G4TokenKind::Rbrace, diagnostics)?;
+        Some(())
+    }
+
+    fn parse_channels_recover(
+        &mut self,
+        grammar: &mut Grammar,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<()> {
+        if self.expect_recover(G4TokenKind::Channels, diagnostics).is_none() {
+            return None;
+        }
+        if self.expect_recover(G4TokenKind::Lbrace, diagnostics).is_none() {
+            return None;
+        }
+        while self.peek_kind() != G4TokenKind::Rbrace && !self.at_end() {
+            let id = self.expect_recover(G4TokenKind::Id, diagnostics)?;
+            grammar.channel_specs.push(id.text);
+            let _ = self.match_kind(G4TokenKind::Comma);
+        }
+        self.expect_recover(G4TokenKind::Rbrace, diagnostics)?;
+        Some(())
+    }
+
+    fn parse_import_recover(&mut self, diagnostics: &mut Vec<Diagnostic>) -> Option<()> {
+        if self.expect_recover(G4TokenKind::Import, diagnostics).is_none() {
+            return None;
+        }
+        loop {
+            self.expect_recover(G4TokenKind::Id, diagnostics)?;
+            if self.match_kind(G4TokenKind::Comma).is_none() {
+                break;
+            }
+        }
+        self.expect_recover(G4TokenKind::Semi, diagnostics)?;
+        Some(())
+    }
+
+    fn parse_action_recover(
+        &mut self,
+        grammar: &mut Grammar,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<()> {
+        if self.expect_recover(G4TokenKind::At, diagnostics).is_none() {
+            return None;
+        }
+        let scope = if self.peek_kind() == G4TokenKind::Id
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .map(|t| t.kind)
+                == Some(G4TokenKind::Colon)
+        {
+            let s = self.advance().text;
+            self.advance();
+            Some(s)
+        } else {
+            None
+        };
+        let name = self.expect_recover(G4TokenKind::Id, diagnostics)?.text;
+        let content = self.expect_recover(G4TokenKind::Action, diagnostics)?.text;
+        grammar.actions.push(GrammarAction {
+            scope,
+            name,
+            content,
+        });
+        Some(())
+    }
+
+    fn parse_mode_recover(&mut self, diagnostics: &mut Vec<Diagnostic>) -> Option<String> {
+        self.advance();
+        let name = self.expect_recover(G4TokenKind::Id, diagnostics)?.text;
+        self.expect_recover(G4TokenKind::Semi, diagnostics)?;
+        Some(name)
+    }
+
+    fn parse_rule_recover(&mut self, diagnostics: &mut Vec<Diagnostic>) -> Option<Rule> {
+        let mut modifiers = Vec::new();
+        let mut is_fragment = false;
+
+        while matches!(
+            self.peek_kind(),
+            G4TokenKind::Fragment
+                | G4TokenKind::Protected
+                | G4TokenKind::Public
+                | G4TokenKind::Private
+        ) {
+            match self.peek_kind() {
+                G4TokenKind::Fragment => {
+                    self.advance();
+                    is_fragment = true;
+                    modifiers.push(RuleModifier::Fragment);
+                }
+                G4TokenKind::Protected => {
+                    self.advance();
+                    modifiers.push(RuleModifier::Protected);
+                }
+                G4TokenKind::Public => {
+                    self.advance();
+                    modifiers.push(RuleModifier::Public);
+                }
+                G4TokenKind::Private => {
+                    self.advance();
+                    modifiers.push(RuleModifier::Private);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let name_tok = self.expect_recover(G4TokenKind::Id, diagnostics)?;
+        let name = name_tok.text;
+        let is_lexer = is_fragment || name.chars().next().map_or(false, |c| c.is_uppercase());
+
+        let mut return_type = None;
+        let mut locals_decl = None;
+        let mut throws = Vec::new();
+
+        if !is_lexer {
+            if self.match_kind(G4TokenKind::Lbrack).is_some() {
+                match self.read_until_matching_bracket() {
+                    Ok(content) => return_type = Some(content),
+                    Err(e) => push_error_as_diagnostic(diagnostics, &e),
+                }
+                let _ = self.expect_recover(G4TokenKind::Rbrack, diagnostics);
+            }
+
+            if self.match_kind(G4TokenKind::Returns).is_some() {
+                if self.expect_recover(G4TokenKind::Lbrack, diagnostics).is_none() {
+                    return self.make_partial_rule(name, is_fragment, modifiers, return_type, locals_decl, throws);
+                }
+                match self.read_until_matching_bracket() {
+                    Ok(content) => return_type = Some(content),
+                    Err(e) => push_error_as_diagnostic(diagnostics, &e),
+                }
+                let _ = self.expect_recover(G4TokenKind::Rbrack, diagnostics);
+            }
+
+            if self.peek_kind() == G4TokenKind::Throws {
+                self.advance();
+                loop {
+                    match self.expect_recover(G4TokenKind::Id, diagnostics) {
+                        Some(t) => throws.push(t.text),
+                        None => break,
+                    }
+                    if self.match_kind(G4TokenKind::Comma).is_none() {
+                        break;
+                    }
+                }
+            }
+
+            if self.peek_kind() == G4TokenKind::Locals {
+                self.advance();
+                if self.expect_recover(G4TokenKind::Lbrack, diagnostics).is_none() {
+                    return self.make_partial_rule(name, is_fragment, modifiers, return_type, locals_decl, throws);
+                }
+                match self.read_until_matching_bracket() {
+                    Ok(content) => locals_decl = Some(content),
+                    Err(e) => push_error_as_diagnostic(diagnostics, &e),
+                }
+                let _ = self.expect_recover(G4TokenKind::Rbrack, diagnostics);
+            }
+
+            while self.peek_kind() == G4TokenKind::At {
+                self.advance();
+                if self.expect_recover(G4TokenKind::Id, diagnostics).is_none() {
+                    return self.make_partial_rule(name, is_fragment, modifiers, return_type, locals_decl, throws);
+                }
+                if self.expect_recover(G4TokenKind::Action, diagnostics).is_none() {
+                    return self.make_partial_rule(name, is_fragment, modifiers, return_type, locals_decl, throws);
+                }
+            }
+        }
+
+        if self.expect_recover(G4TokenKind::Colon, diagnostics).is_none() {
+            return self.make_partial_rule(name, is_fragment, modifiers, return_type, locals_decl, throws);
+        }
+
+        let alternatives = if is_lexer {
+            match self.parse_lexer_alternatives() {
+                Ok(alts) => alts,
+                Err(e) => {
+                    push_error_as_diagnostic(diagnostics, &e);
+                    Vec::new()
+                }
+            }
+        } else {
+            match self.parse_parser_alternatives() {
+                Ok(alts) => alts,
+                Err(e) => {
+                    push_error_as_diagnostic(diagnostics, &e);
+                    Vec::new()
+                }
+            }
+        };
+
+        let mut commands = Vec::new();
+        if self.match_kind(G4TokenKind::Rarrow).is_some() {
+            loop {
+                let cmd_name = match self.expect_recover(G4TokenKind::Id, diagnostics) {
+                    Some(t) => t.text,
+                    None => break,
+                };
+                let arg = if self.match_kind(G4TokenKind::Lparen).is_some() {
+                    let arg = match self.expect_recover(G4TokenKind::Id, diagnostics) {
+                        Some(t) => Some(t.text),
+                        None => {
+                            let _ = self.expect_recover(G4TokenKind::Rparen, diagnostics);
+                            None
+                        }
+                    };
+                    let _ = self.expect_recover(G4TokenKind::Rparen, diagnostics);
+                    arg
+                } else {
+                    None
+                };
+                commands.push(LexerCommand::new(&cmd_name, arg));
+                if self.match_kind(G4TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+
+        let _ = self.expect_recover(G4TokenKind::Semi, diagnostics);
+
+        Some(Rule {
+            name,
+            is_fragment,
+            modifiers,
+            return_type,
+            locals_decl,
+            throws,
+            alternatives,
+            commands,
+            mode: None,
+        })
+    }
+
+    fn make_partial_rule(
+        &self,
+        name: String,
+        is_fragment: bool,
+        modifiers: Vec<RuleModifier>,
+        return_type: Option<String>,
+        locals_decl: Option<String>,
+        throws: Vec<String>,
+    ) -> Option<Rule> {
+        if name.is_empty() {
+            None
+        } else {
+            Some(Rule {
+                name,
+                is_fragment,
+                modifiers,
+                return_type,
+                locals_decl,
+                throws,
+                alternatives: Vec::new(),
+                commands: Vec::new(),
+                mode: None,
+            })
+        }
     }
 
     fn current(&self) -> &G4Token {
@@ -94,6 +545,8 @@ impl G4Parser {
             rules: Vec::new(),
         };
 
+        let mut current_mode: Option<String> = None;
+
         while !self.at_end() {
             match self.peek_kind() {
                 G4TokenKind::Options => {
@@ -112,10 +565,11 @@ impl G4Parser {
                     self.parse_action(&mut grammar)?;
                 }
                 G4TokenKind::Mode => {
-                    self.parse_mode(&mut grammar)?;
+                    current_mode = Some(self.parse_mode(&mut grammar)?);
                 }
                 _ => {
-                    let rule = self.parse_rule()?;
+                    let mut rule = self.parse_rule()?;
+                    rule.mode = current_mode.clone();
                     grammar.rules.push(rule);
                 }
             }
@@ -213,11 +667,11 @@ impl G4Parser {
         Ok(())
     }
 
-    fn parse_mode(&mut self, _grammar: &mut Grammar) -> crate::core::Result<()> {
+    fn parse_mode(&mut self, _grammar: &mut Grammar) -> crate::core::Result<String> {
         self.advance();
-        let _name = self.expect(G4TokenKind::Id)?;
+        let name = self.expect(G4TokenKind::Id)?.text;
         self.expect(G4TokenKind::Semi)?;
-        Ok(())
+        Ok(name)
     }
 
     fn parse_rule(&mut self) -> crate::core::Result<Rule> {
@@ -333,6 +787,7 @@ impl G4Parser {
             throws,
             alternatives,
             commands,
+            mode: None,
         })
     }
 
@@ -680,6 +1135,30 @@ impl G4Parser {
     }
 }
 
+fn push_error_as_diagnostic(diagnostics: &mut Vec<Diagnostic>, err: &Error) {
+    match err {
+        Error::Lexer { location, message } => {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: message.clone(),
+                location: Some(location.clone()),
+                note: None,
+            });
+        }
+        Error::Parser { location, message } => {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                message: message.clone(),
+                location: Some(location.clone()),
+                note: None,
+            });
+        }
+        other => {
+            diagnostics.push(Diagnostic::error(other.to_string()));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,5 +1387,125 @@ start: EOF;
         let rule = &grammar.rules[0];
         assert_eq!(rule.alternatives.len(), 1);
         assert!(matches!(rule.alternatives[0].elements[0].kind, ElementKind::ZeroOrMore(_)));
+    }
+
+    fn recover_parse(source: &str) -> (Option<Grammar>, Vec<Diagnostic>) {
+        let lexer = crate::grammar::G4Lexer::new(source);
+        let (tokens, _lexer_diags) = lexer.tokenize_recover();
+        G4Parser::new(tokens).parse_recover()
+    }
+
+    #[test]
+    fn test_recover_clean_grammar_has_no_diagnostics() {
+        let (grammar, diags) = recover_parse("grammar Test; start: EOF;");
+        assert!(grammar.is_some());
+        assert!(diags.is_empty(), "expected no diagnostics, got {:?}", diags);
+    }
+
+    #[test]
+    fn test_recover_missing_colon_collects_diagnostic() {
+        let (grammar, diags) = recover_parse("grammar Test; start EOF;");
+        assert!(!diags.is_empty(), "expected at least one diagnostic");
+        let has_colon = diags.iter().any(|d| d.message.contains("':'"));
+        assert!(has_colon, "expected ':' diagnostic, got {:?}", diags);
+        assert!(grammar.is_some(), "grammar should still be recoverable");
+    }
+
+    #[test]
+    fn test_recover_multiple_bad_rules_collect_multiple_diagnostics() {
+        let source = "grammar Test; a EOF; b : EOF; c @@@ EOF;";
+        let (grammar, diags) = recover_parse(source);
+        assert!(diags.len() >= 2, "expected multiple diagnostics, got {:?}", diags);
+        assert!(grammar.is_some(), "grammar should still be recoverable");
+    }
+
+    #[test]
+    fn test_recover_unrecoverable_header_returns_none() {
+        let (grammar, diags) = recover_parse("totally not a grammar");
+        assert!(grammar.is_none() || !diags.is_empty());
+    }
+
+    #[test]
+    fn test_recover_partial_rule_has_empty_alternatives() {
+        let (grammar, diags) = recover_parse("grammar Test; good: EOF; bad EOF;");
+        let g = grammar.expect("grammar should be Some");
+        let bad_rule = g.rules.iter().find(|r| r.name == "bad");
+        assert!(bad_rule.is_some(), "bad rule should still be present");
+        assert!(bad_rule.unwrap().alternatives.is_empty());
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_default_mode_rules_have_no_mode() {
+        let grammar = G4Parser::test_parse("grammar Test; ID: [a-z]+;").unwrap();
+        assert_eq!(grammar.rules.len(), 1);
+        assert_eq!(grammar.rules[0].mode, None);
+    }
+
+    #[test]
+    fn test_parse_mode_assigns_rules_to_named_mode() {
+        let source = "grammar Test; mode STR; STR_CHAR: ~'\"';";
+        let grammar = G4Parser::test_parse(source).unwrap();
+        assert_eq!(grammar.rules.len(), 1);
+        assert_eq!(grammar.rules[0].name, "STR_CHAR");
+        assert_eq!(grammar.rules[0].mode.as_deref(), Some("STR"));
+    }
+
+    #[test]
+    fn test_parse_mode_switches_between_modes() {
+        let source = r#"
+            grammar Test;
+            A: 'a';
+            mode M1;
+            B: 'b';
+            mode M2;
+            C: 'c';
+            D: 'd';
+        "#;
+        let grammar = G4Parser::test_parse(source).unwrap();
+        let modes: Vec<(&str, Option<&str>)> = grammar
+            .rules
+            .iter()
+            .map(|r| (r.name.as_str(), r.mode.as_deref()))
+            .collect();
+        assert_eq!(modes, vec![
+            ("A", None),
+            ("B", Some("M1")),
+            ("C", Some("M2")),
+            ("D", Some("M2")),
+        ]);
+    }
+
+    #[test]
+    fn test_parse_multiple_modes_collect_lexically() {
+        let source = r#"
+            grammar Test;
+            mode ALPHA;
+            ALPHA_CHAR: [a-z];
+            mode DIGIT;
+            DIGIT_CHAR: [0-9];
+        "#;
+        let grammar = G4Parser::test_parse(source).unwrap();
+        let modes = grammar.lexer_modes();
+        assert!(modes.contains(&"DEFAULT_MODE".to_string()));
+        assert!(modes.contains(&"ALPHA".to_string()));
+        assert!(modes.contains(&"DIGIT".to_string()));
+    }
+
+    #[test]
+    fn test_parse_mode_recovery_pushes_partial_rules() {
+        let source = r#"
+            grammar Test;
+            mode A;
+            good: 'g';
+            bad EOF;
+        "#;
+        let (grammar, diags) = recover_parse(source);
+        let g = grammar.expect("grammar should be Some");
+        let good = g.rules.iter().find(|r| r.name == "good").unwrap();
+        assert_eq!(good.mode.as_deref(), Some("A"));
+        let bad = g.rules.iter().find(|r| r.name == "bad").unwrap();
+        assert_eq!(bad.mode.as_deref(), Some("A"));
+        assert!(!diags.is_empty());
     }
 }

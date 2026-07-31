@@ -43,6 +43,8 @@ You already have ANTLR4 grammars. Rewriting them for every target language — o
 - **No runtime dependencies** — Generated parsers are self-contained
 - **Semantic analysis** — First/follow sets, left-recursion elimination
 - **Structured errors** — Source locations on lexer/parser failures
+- **Error recovery & multi-error reporting** — Continues parsing past errors and reports every diagnostic at once
+- **Lexer modes** — `mode NAME;` blocks (default + named) with `pushMode` / `popMode` / `mode` commands
 - **MCP server** — `pargen-mcp` binary with 5 tools for AI integration
 - **Structured logging** — `tracing`-based output with `RUST_LOG` support
 
@@ -119,9 +121,52 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for module layout and extension points.
 
 ```bash
 cargo build
-cargo test          # 116 tests
+cargo test          # 148 tests
 RUST_LOG=debug cargo run -- generate -g examples/calc.g4 -l rust
 ```
+
+## Error Recovery
+
+Both the lexer and parser report multiple diagnostics at once instead of
+stopping at the first error. The CLI `check` and `generate` commands print
+every diagnostic with its `severity: line:column: message` and any
+attached `note`. Internally:
+
+- `G4Lexer::tokenize_recover()` returns `(Vec<G4Token>, Vec<Diagnostic>)`
+- `G4Parser::parse_recover()` returns `(Option<Grammar>, Vec<Diagnostic>)`
+- `pargen::parse_grammar_source_detailed(source)` ties both together and
+  returns `(Option<Grammar>, Vec<Diagnostic>)`. The grammar is `None` only
+  if even the header (`grammar X;`) failed to parse.
+
+This makes authoring grammars much faster — fix several errors at once
+instead of one per re-run.
+
+## Lexer Modes
+
+`pargen` understands ANTLR4's `mode` syntax for context-sensitive
+lexing. Rules declared after a `mode NAME;` header belong to that mode;
+the default mode is implicit and contains rules that appear before any
+mode declaration or are not inside a mode block.
+
+```antlr
+grammar Json;
+
+start: value;
+
+STRING: '"' -> pushMode(STRING) ;
+NUMBER: [0-9]+ ;
+WS: [ \t\r\n]+ -> skip ;
+
+mode STRING;
+CONTENT: ~'"'+ ;
+END: '"' -> popMode ;
+```
+
+The Rust target emits a `LexerMode` enum, a `mode` field on the lexer,
+and per-mode dispatch functions. `pushMode(NAME)`, `popMode`, and
+`mode(NAME)` lexer commands translate to assignments that update the
+mode state after a token matches. Call `Grammar::lexer_modes()` to list
+all modes declared in a grammar (always including `DEFAULT_MODE`).
 
 ## License
 

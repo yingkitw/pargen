@@ -1,4 +1,4 @@
-use pargen::{parse_grammar_source, generate};
+use pargen::{parse_grammar_source, parse_grammar_source_detailed, generate};
 
 fn calculator_grammar() -> &'static str {
     r#"grammar Calculator;
@@ -260,4 +260,98 @@ start: ID;
     let grammar = parse_grammar_source(source).unwrap();
     let id_rule = grammar.find_rule("ID").unwrap();
     assert_eq!(id_rule.alternatives.len(), 1);
+}
+
+#[test]
+fn test_detailed_clean_grammar_returns_no_diagnostics() {
+    let (grammar, diagnostics) = parse_grammar_source_detailed(calculator_grammar());
+    assert!(grammar.is_some());
+    assert!(diagnostics.is_empty(), "expected no diagnostics, got {:?}", diagnostics);
+}
+
+#[test]
+fn test_detailed_lexer_errors_collected() {
+    let source = "grammar Test; % & \\ start: EOF;";
+    let (grammar, diagnostics) = parse_grammar_source_detailed(source);
+    assert!(diagnostics.len() >= 2, "expected 2+ diagnostics, got {:?}", diagnostics);
+    assert!(grammar.is_some(), "grammar should still be recovered");
+}
+
+#[test]
+fn test_detailed_parser_errors_collected() {
+    let source = "grammar Test;\nstart EOF;\nother : EOF;";
+    let (grammar, diagnostics) = parse_grammar_source_detailed(source);
+    assert!(!diagnostics.is_empty(), "expected at least one diagnostic");
+    let g = grammar.expect("grammar should be recoverable");
+    let other = g.find_rule("other").expect("'other' rule should be parsed");
+    assert_eq!(other.alternatives.len(), 1);
+}
+
+#[test]
+fn test_detailed_diagnostics_have_locations() {
+    let source = "grammar Test; bad EOF;";
+    let (_grammar, diagnostics) = parse_grammar_source_detailed(source);
+    assert!(!diagnostics.is_empty());
+    let with_location = diagnostics
+        .iter()
+        .filter(|d| d.location.is_some())
+        .count();
+    assert!(with_location > 0, "expected diagnostics with source locations, got {:?}", diagnostics);
+}
+
+#[test]
+fn test_detailed_unrecoverable_header() {
+    let (grammar, diagnostics) = parse_grammar_source_detailed("");
+    assert!(grammar.is_none());
+    assert!(!diagnostics.is_empty());
+}
+
+#[test]
+fn test_lexer_modes_lists_default_and_named_modes() {
+    let source = r#"grammar M;
+ID: [a-z]+;
+mode STRINGS;
+STR_CHAR: ~'"';
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    let modes = grammar.lexer_modes();
+    assert!(modes.contains(&"DEFAULT_MODE".to_string()), "modes: {:?}", modes);
+    assert!(modes.contains(&"STRINGS".to_string()), "modes: {:?}", modes);
+}
+
+#[test]
+fn test_lexer_rules_in_mode_segregates() {
+    let source = r#"grammar M;
+ID: [a-z]+;
+NUM: [0-9]+;
+mode STRINGS;
+STR_CHAR: ~'"';
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    let default = grammar.lexer_rules_in_mode(None);
+    assert_eq!(default.len(), 2);
+    assert!(default.iter().any(|r| r.name == "ID"));
+    assert!(default.iter().any(|r| r.name == "NUM"));
+
+    let strings = grammar.lexer_rules_in_mode(Some("STRINGS"));
+    assert_eq!(strings.len(), 1);
+    assert_eq!(strings[0].name, "STR_CHAR");
+}
+
+#[test]
+fn test_mode_command_push_pop_mode_roundtrip() {
+    let source = r#"grammar M;
+Q: '"' -> pushMode(STRINGS);
+mode STRINGS;
+C: ~'"';
+E: '"' -> popMode;
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    let q = grammar.find_rule("Q").unwrap();
+    assert_eq!(q.mode, None);
+    assert!(q.commands.iter().any(|c| c.name == "pushMode" && c.arg.as_deref() == Some("STRINGS")));
+
+    let e = grammar.find_rule("E").unwrap();
+    assert_eq!(e.mode.as_deref(), Some("STRINGS"));
+    assert!(e.commands.iter().any(|c| c.name == "popMode"));
 }

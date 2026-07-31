@@ -80,6 +80,7 @@ fn transform_direct_left_recursion(rule: &Rule) -> Vec<Rule> {
         throws: rule.throws.clone(),
         alternatives: Vec::new(),
         commands: Vec::new(),
+        mode: rule.mode.clone(),
     };
 
     if base_alts.is_empty() {
@@ -104,6 +105,7 @@ fn transform_direct_left_recursion(rule: &Rule) -> Vec<Rule> {
         throws: Vec::new(),
         alternatives: suffix_alts,
         commands: Vec::new(),
+        mode: rule.mode.clone(),
     };
 
     vec![new_rule, suffix_rule]
@@ -149,6 +151,7 @@ fn eliminate_indirect_lr(
             throws: rule.throws.clone(),
             alternatives: new_alts,
             commands: rule.commands.clone(),
+            mode: rule.mode.clone(),
         })
     } else {
         None
@@ -179,6 +182,7 @@ mod tests {
                 .map(|elems| Alternative::new(elems.into_iter().map(Element::new).collect()))
                 .collect(),
             commands: Vec::new(),
+            mode: None,
         }
     }
 
