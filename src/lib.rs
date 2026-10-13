@@ -6,7 +6,7 @@ pub mod mcp;
 
 pub use core::{Error, Result, Diagnostic, DiagnosticSeverity, ErrorBag, SourceLocation};
 pub use core::{GrammarParser, SemanticAnalyzer, CodeGenerator};
-pub use grammar::{Grammar, GrammarKind, Rule, RuleModifier, Alternative, Element, ElementKind};
+pub use grammar::{Grammar, GrammarKind, Rule, RuleModifier, Alternative, Element, ElementKind, PredicateInfo, ChannelInfo};
 pub use analysis::ProcessedGrammar;
 
 use anyhow::Result as AnyhowResult;

@@ -26,6 +26,9 @@ impl CodeGenerator for RustGenerator {
         gen_lexer(&mut w, name, pg, &modes);
         gen_cst_node(&mut w, name, pg);
         gen_parser(&mut w, name, pg);
+        gen_visitor(&mut w, name, pg);
+        gen_listener(&mut w, name, pg);
+        gen_walker(&mut w, name, pg);
         gen_error(&mut w, name);
 
         w.to_string()
@@ -285,11 +288,12 @@ fn gen_lexer_match_fn(w: &mut super::CodeWriter, name: &str, rule: &Rule, _pg: &
             }
             ElementKind::CharSet(cs) => {
                 let class = cs.to_regex_class();
+                let predicate = charset_match_expr(cs);
                 w.line(&format!("// charset: {}", class));
                 w.line("let mut len = 0;");
                 w.line("while let Some(c) = self.peek_at(len) {");
                 w.indent();
-                w.line("if Self::char_in_ranges(c, &RANGES) { len += 1; } else { break; }");
+                w.line(&format!("if {} {{ len += 1; }} else {{ break; }}", predicate));
                 w.dedent();
                 w.line("}");
                 w.line("if len == 0 { return None; }");
@@ -336,15 +340,71 @@ fn gen_lexer_match_fn(w: &mut super::CodeWriter, name: &str, rule: &Rule, _pg: &
     w.blank();
 }
 
+/// Build the Rust boolean expression that tests whether `c` (a local
+/// `char` binding inside the generated lexer) is a member of `cs`.
+/// Produces a self-contained expression — no `Self::char_in_ranges`
+/// reference and no global `RANGES` constant — so it compiles as-is.
+fn charset_match_expr(cs: &crate::grammar::ast::CharSetDef) -> String {
+    use crate::grammar::ast::CharRange;
+    use std::fmt::Write as _;
+
+    fn escape_char(c: char) -> String {
+        match c {
+            '\\' => "'\\\\'".to_string(),
+            '\'' => "'\\''".to_string(),
+            '\n' => "'\\n'".to_string(),
+            '\r' => "'\\r'".to_string(),
+            '\t' => "'\\t'".to_string(),
+            '\0' => "'\\0'".to_string(),
+            // Other control chars: use \u{XX}
+            c if (c as u32) < 0x20 => format!("'\\u{{{:02X}}}'", c as u32),
+            c if (c as u32) > 0x7E => format!("'\\u{{{:X}}}'", c as u32),
+            c => format!("'{}'", c),
+        }
+    }
+
+    let range_check = |r: &CharRange| -> String {
+        // Same single-char range → match a single literal; this avoids
+        // producing `('\a'..='\a').contains(&c)` for trivial ranges.
+        if r.start == r.end {
+            format!("c == {}", escape_char(r.start))
+        } else {
+            format!("({}..={}).contains(&c)", escape_char(r.start), escape_char(r.end))
+        }
+    };
+
+    let mut buf = String::new();
+    for (i, r) in cs.ranges.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(" || ");
+        }
+        buf.push_str(&range_check(r));
+    }
+    if cs.ranges.is_empty() {
+        // An empty charset matches nothing.
+        buf.push_str("false");
+    }
+    if cs.negated {
+        // Wrap in parens so the negation applies cleanly under `if`.
+        let wrapped = format!("({})", buf);
+        return format!("!{}", wrapped);
+    }
+    // Use a fresh String so we never mutate `buf` after the negation branch
+    // above. (`_ = writeln!` pattern below avoids a redundant allocation.)
+    let _ = write!(String::new(), "");
+    buf
+}
+
 fn gen_lexer_element_match(w: &mut super::CodeWriter, kind: &ElementKind) {
     match kind {
         ElementKind::CharSet(cs) => {
             let class = cs.to_regex_class();
+            let predicate = charset_match_expr(cs);
             w.line(&format!("// match one or more of charset: {}", class));
             w.line("let mut len = 0;");
             w.line("while let Some(c) = self.peek_at(len) {");
             w.indent();
-            w.line("if Self::char_in_ranges(c, &RANGES) { len += 1; } else { break; }");
+            w.line(&format!("if {} {{ len += 1; }} else {{ break; }}", predicate));
             w.dedent();
             w.line("}");
             w.line("if len == 0 { self.pos = saved_pos; return None; }");
@@ -640,6 +700,130 @@ fn gen_parse_elements(w: &mut super::CodeWriter, name: &str, elements: &[Element
             ElementKind::Range(_, _) | ElementKind::CharSet(_) | ElementKind::Not(_) => {}
         }
     }
+}
+
+fn gen_visitor(w: &mut super::CodeWriter, name: &str, pg: &ProcessedGrammar) {
+    let rules: Vec<&Rule> = pg.parser_rules();
+    w.line("/// AST visitor — override one method per rule you care about.");
+    w.line(&format!("pub trait {}Visitor {{", name));
+    w.indent();
+    for rule in &rules {
+        w.line(&format!(
+            "fn visit_{}(&mut self, _node: &{}Node) {{}}",
+            snake_case(&rule.name),
+            name
+        ));
+    }
+    w.line(&format!(
+        "fn visit_token(&mut self, _node: &{}Node) {{}}",
+        name
+    ));
+    w.dedent();
+    w.line("}");
+    w.blank();
+}
+
+fn gen_listener(w: &mut super::CodeWriter, name: &str, pg: &ProcessedGrammar) {
+    let rules: Vec<&Rule> = pg.parser_rules();
+    w.line("/// AST listener — `enter_<rule>` fires before children, `exit_<rule>` after.");
+    w.line(&format!("pub trait {}Listener {{", name));
+    w.indent();
+    for rule in &rules {
+        w.line(&format!(
+            "fn enter_{}(&mut self, _node: &{}Node) {{}}",
+            snake_case(&rule.name),
+            name
+        ));
+        w.line(&format!(
+            "fn exit_{}(&mut self, _node: &{}Node) {{}}",
+            snake_case(&rule.name),
+            name
+        ));
+    }
+    w.line(&format!(
+        "fn visit_token(&mut self, _node: &{}Node) {{}}",
+        name
+    ));
+    w.dedent();
+    w.line("}");
+    w.blank();
+}
+
+fn gen_walker(w: &mut super::CodeWriter, name: &str, pg: &ProcessedGrammar) {
+    let rules: Vec<&Rule> = pg.parser_rules();
+
+    // Visitor walker
+    w.line("/// Depth-first walk over the CST for visitors.");
+    w.line(&format!(
+        "pub fn walk_{}<V: {}Visitor + ?Sized>(visitor: &mut V, node: &{}Node) {{",
+        snake_case(name),
+        name,
+        name
+    ));
+    w.indent();
+    w.line("match node {");
+    w.indent();
+    for rule in &rules {
+        w.line(&format!(
+            "{}Node::{}{{ children, .. }} => {{",
+            name,
+            rule.name
+        ));
+        w.indent();
+        w.line(&format!("visitor.visit_{}(node);", snake_case(&rule.name)));
+        w.line(&format!(
+            "for child in children {{ walk_{}(visitor, child); }}",
+            snake_case(name)
+        ));
+        w.dedent();
+        w.line("}");
+    }
+    w.line(&format!(
+        "{}Node::Token {{ .. }} => {{ visitor.visit_token(node); }}",
+        name
+    ));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    // Listener walker
+    w.line("/// Depth-first walk over the CST for listeners (enter/exit bracket children).");
+    w.line(&format!(
+        "pub fn walk_{}_listen<L: {}Listener + ?Sized>(listener: &mut L, node: &{}Node) {{",
+        snake_case(name),
+        name,
+        name
+    ));
+    w.indent();
+    w.line("match node {");
+    w.indent();
+    for rule in &rules {
+        w.line(&format!(
+            "{}Node::{}{{ children, .. }} => {{",
+            name,
+            rule.name
+        ));
+        w.indent();
+        w.line(&format!("listener.enter_{}(node);", snake_case(&rule.name)));
+        w.line(&format!(
+            "for child in children {{ walk_{}_listen(listener, child); }}",
+            snake_case(name)
+        ));
+        w.line(&format!("listener.exit_{}(node);", snake_case(&rule.name)));
+        w.dedent();
+        w.line("}");
+    }
+    w.line(&format!(
+        "{}Node::Token {{ .. }} => {{ listener.visit_token(node); }}",
+        name
+    ));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
 }
 
 fn gen_error(w: &mut super::CodeWriter, name: &str) {

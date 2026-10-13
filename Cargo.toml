@@ -1,6 +1,6 @@
 [package]
 name = "pargen"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "A parser generator using ANTLR grammar syntax, outputting to Rust, Go, TypeScript, Python, Java, C, C++, and Tree-sitter"
 license = "Apache-2.0"
@@ -15,6 +15,10 @@ path = "src/main.rs"
 [[bin]]
 name = "pargen-mcp"
 path = "src/bin/pargen-mcp.rs"
+
+[[bench]]
+name = "parser_codegen"
+harness = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

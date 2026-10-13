@@ -130,6 +130,31 @@ start: EOF;
             info!("Grammar '{}' parsed (with possible recovery)", grammar_ast.name);
             info!("  Lexer rules: {}", grammar_ast.lexer_rules().len());
             info!("  Parser rules: {}", grammar_ast.parser_rules().len());
+            let preds = grammar_ast.predicates();
+            if preds.is_empty() {
+                info!("  Semantic predicates: 0");
+            } else {
+                info!("  Semantic predicates: {} (not enforced by codegen yet)", preds.len());
+                for p in &preds {
+                    info!(
+                        "    - {}[alt {}].{} = {{ {} }}?",
+                        p.rule_name, p.alternative_index, p.element_index, p.source
+                    );
+                }
+            }
+            let channels = grammar_ast.channels();
+            if channels.is_empty() {
+                info!("  Lexer channels: 0");
+            } else {
+                info!("  Lexer channels: {} (routing not emitted by codegen yet)", channels.len());
+                for ch in &channels {
+                    if ch.assigned_rules.is_empty() {
+                        info!("    - {} (no rules)", ch.name);
+                    } else {
+                        info!("    - {} ← {}", ch.name, ch.assigned_rules.join(", "));
+                    }
+                }
+            }
             for rule in &grammar_ast.rules {
                 let kind = if rule.is_lexer_rule() { "lexer" } else { "parser" };
                 let skip = if rule.is_skip() { " (skip)" } else { "" };

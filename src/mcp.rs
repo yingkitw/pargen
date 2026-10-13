@@ -205,6 +205,22 @@ impl PargenServer {
             .map(|r| r.name.clone())
             .collect();
 
+        let predicates: Vec<_> = grammar.predicates().iter()
+            .map(|p| serde_json::json!({
+                "rule": p.rule_name,
+                "alternative_index": p.alternative_index,
+                "element_index": p.element_index,
+                "source": p.source,
+            }))
+            .collect();
+
+        let channels: Vec<_> = grammar.channels().iter()
+            .map(|c| serde_json::json!({
+                "name": c.name,
+                "assigned_rules": c.assigned_rules,
+            }))
+            .collect();
+
         let result = serde_json::json!({
             "name": grammar.name,
             "type": format!("{:?}", grammar.kind),
@@ -214,6 +230,10 @@ impl PargenServer {
             "rules_count": grammar.rules.len(),
             "parser_rules_count": parser_rules.len(),
             "lexer_rules_count": lexer_rules.len(),
+            "predicates": predicates,
+            "predicates_count": predicates.len(),
+            "channels": channels,
+            "channels_count": channels.len(),
         });
 
         Ok(CallToolResult::success(vec![Content::json(result)?]))

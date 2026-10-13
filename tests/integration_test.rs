@@ -355,3 +355,115 @@ E: '"' -> popMode;
     assert_eq!(e.mode.as_deref(), Some("STRINGS"));
     assert!(e.commands.iter().any(|c| c.name == "popMode"));
 }
+
+// --- Semantic predicate detection ----------------------------------------
+
+#[test]
+fn test_predicate_detection_via_parse() {
+    // Grammar with one top-level predicate and one inside a group.
+    let source = r#"grammar Pred;
+expr: { $a > 0 }? ID | ('+' { $b }? ID)+;
+ID: [a-z]+;
+WS: [ \t\n]+ -> skip;
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    let preds = grammar.predicates();
+    assert_eq!(preds.len(), 2);
+    assert_eq!(preds[0].rule_name, "expr");
+    assert_eq!(preds[0].alternative_index, 0);
+    assert_eq!(preds[0].element_index, 0);
+    assert_eq!(preds[0].source, "$a > 0");
+    assert_eq!(preds[1].alternative_index, 1);
+    assert_eq!(preds[1].source, "$b");
+}
+
+#[test]
+fn test_predicate_detection_no_predicates() {
+    let source = r#"grammar NoPred;
+expr: ID ('+' ID)*;
+ID: [a-z]+;
+WS: [ \t\n]+ -> skip;
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    assert!(grammar.predicates().is_empty());
+}
+
+#[test]
+fn test_predicate_info_is_serializable() {
+    // PredicateInfo derives Serialize/Deserialize — confirm round-trip via JSON.
+    let source = r#"grammar PS;
+expr: { true }? ID;
+ID: [a-z]+;
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    let preds = grammar.predicates();
+    assert_eq!(preds.len(), 1);
+    let json = serde_json::to_string(&preds[0]).expect("serialize");
+    let back: pargen::PredicateInfo = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, preds[0]);
+}
+
+// --- Lexer channel detection --------------------------------------------
+
+#[test]
+fn test_channel_detection_via_parse() {
+    // Per-rule `-> channel(NAME)` is supported by the parser; the
+    // `channels { ... }` declaration block is *not* parseable through
+    // the current lexer (it slurps `{ HIDDEN }` as a single Action token).
+    // So we exercise per-rule channel assignment, which is the path
+    // that real users hit. Implicit channels surface even without
+    // a declaration block (mirrors ANTLR behavior).
+    let source = r#"grammar Ch;
+COMMENT: '//' ~[\n]* -> channel(HIDDEN);
+BAD: '!!!' -> channel(ERROR);
+
+start: ID;
+ID: [a-z]+;
+WS: [ \t\n]+ -> skip;
+"#;
+    let (grammar, _diagnostics) = parse_grammar_source_detailed(source);
+    let grammar = grammar.expect("grammar should parse");
+    let chans = grammar.channels();
+    assert_eq!(chans.len(), 2);
+    let names: Vec<&str> = chans.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"HIDDEN"));
+    assert!(names.contains(&"ERROR"));
+
+    let hidden = chans.iter().find(|c| c.name == "HIDDEN").unwrap();
+    assert_eq!(hidden.assigned_rules, vec!["COMMENT"]);
+    let error = chans.iter().find(|c| c.name == "ERROR").unwrap();
+    assert_eq!(error.assigned_rules, vec!["BAD"]);
+}
+
+#[test]
+fn test_channel_detection_no_channels_declared() {
+    let source = r#"grammar NC;
+start: ID;
+ID: [a-z]+;
+WS: [ \t\n]+ -> skip;
+"#;
+    let grammar = parse_grammar_source(source).unwrap();
+    assert!(grammar.channels().is_empty());
+}
+
+#[test]
+fn test_channel_info_is_serializable() {
+    // ChannelInfo derives Serialize/Deserialize — confirm round-trip via JSON.
+    // Build the fixture programmatically because the current lexer
+    // slurps `{ HIDDEN }` as an Action token (a separate, pre-existing
+    // limitation — see MEMORY.md).
+    let channel_specs = vec!["HIDDEN".to_string()];
+    let channel_json = serde_json::json!({
+        "name": "HIDDEN",
+        "assigned_rules": vec!["COMMENT"],
+    });
+    let info: pargen::ChannelInfo = serde_json::from_value(channel_json).unwrap();
+    assert_eq!(info.name, "HIDDEN");
+    assert_eq!(info.assigned_rules, vec!["COMMENT"]);
+    assert!(channel_specs.contains(&info.name));
+
+    // Round-trip
+    let json = serde_json::to_string(&info).expect("serialize");
+    let back: pargen::ChannelInfo = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, info);
+}
