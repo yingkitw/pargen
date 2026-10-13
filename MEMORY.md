@@ -112,6 +112,14 @@ Use this file to find proven patterns, avoid known pitfalls, and follow establis
 - MCP server (`src/mcp.rs` + `src/bin/pargen-mcp.rs`) exposes 5 tools over stdio transport: `parse_grammar`, `validate_grammar`, `generate_code`, `get_grammar_info`, `list_target_languages`. Schemas are derived via `schemars` annotations on input structs.
 - Codegen failures should bubble up via `anyhow::Result`, then be formatted with `.context(...)`. Don't surface raw `String` errors.
 
+## 7. Benchmarks — added 2026-10-13
+
+- **Where**: `benches/parser_codegen.rs` (criterion target, `harness = false` in `Cargo.toml`) and `tests/bench_smoke.rs` (3 integration tests that exercise the public API the benches depend on).
+- **Why both files**: criterion's `criterion_main!` replaces the Rust test harness's `main` for the bench crate, so `#[test]` items inside `benches/parser_codegen.rs` don't run under `cargo test`. Putting the smoke tests in `tests/bench_smoke.rs` gives `cargo test` a way to lock in the public API surface (`parse_grammar_source`, `parse_grammar_source_detailed`, `ProcessedGrammar::process`, `codegen::get_generator`).
+- **Why so few targets (4)**: each bench should measure *one* phase. Combining parse + analysis + codegen hides which step regressed. The current four cover the dominant pipeline paths; expanding to all 8 codegen targets is on the brainstorming backlog.
+- **Initial numbers** (release profile, --warm-up-time 0.1, --measurement-time 0.2, 2026-10-13, this MacBook): strict parse 4.2 µs, recovery parse 4.1 µs, full Rust pipeline 260 µs (~58× slower than parse — String allocation per line via `CodeWriter` dominates), scaling N=64 11.3 µs.
+- **Anti-pattern observed**: bench fixtures (`CALCULATOR_SOURCE`) live in `benches/parser_codegen.rs`; the smoke test's `CALCULATOR_SOURCE` is a separate `const` in `tests/bench_smoke.rs`. They must stay in sync by hand. A `tests/common/mod.rs` or `pub const` re-export would be cleaner but adds a layer for only two short fixtures — not worth it yet. Note in code review if a third fixture appears.
+
 ---
 
 ## Known bugs & pitfalls
@@ -119,6 +127,8 @@ Use this file to find proven patterns, avoid known pitfalls, and follow establis
 - **Clippy warnings (~73)** are mostly pre-existing style preferences (`useless_format`, `inherent_to_string`). New code is expected to pass clippy clean — write new code without them, even if the surrounding code violates them.
 - **`parse` CLI subcommand** is a placeholder — it doesn't yet execute a generated parser on input. That's a deferred feature, not a bug per se.
 - **Channel support** (`-> channel(HIDDEN)`) is in the AST (`RuleModifier::Channel`) but only `skip` and mode commands are codegen'd.
+- **Position-restore in generated lexer** — investigated (2026-10-13), found to be unreachable today (`peek_at` doesn't advance `self.pos`; `len == 0` only fires at EOF). Documented in ARCHITECTURE Known Limitations §6 as benign. Do NOT apply a defensive fix without a concrete reproducer (per Mature Module Policy).
+- **`channels { HIDDEN }` declaration block** — strict lexer slurps `{ HIDDEN }` into a single Action token, so the `channels { ... }` block is unparseable via `parse_grammar_source` (only via `parse_grammar_source_detailed`). Per-rule `-> channel(NAME)` works because no `{` follows. See ARCHITECTURE Known Limitations §7.
 
 ## When MEMORY.md needs attention
 
