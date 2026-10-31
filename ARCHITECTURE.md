@@ -21,6 +21,7 @@ src/
 ├── core/
 │   ├── error.rs    — Error, Result, SourceLocation, Diagnostic, DiagnosticSeverity
 │   ├── traits.rs   — GrammarParser, SemanticAnalyzer, CodeGenerator traits
+│   │                (see "Two CodeGenerator Traits" below — currently unused)
 │   └── mod.rs      — re-exports
 ├── grammar/
 │   ├── ast.rs      — Grammar, Rule, Alternative, Element, ElementKind, CharSetDef, etc.
@@ -129,20 +130,26 @@ pub enum Error {
 - `ErrorBag` collects multiple `Diagnostic`s. It is the engine behind multi-error reporting — `Error::Multiple` wraps it; `to_error()` collapses a bag of one diagnostic into a single `Error::Parser` for ergonomic single-error use.
 - Expected items use `Diagnostic::error(msg).at(line, col).with_note("expected …")` to attach context.
 
+> **Note on `UnsupportedLanguage`**: the supported-language list is duplicated in two places — the `thiserror` message in `src/core/error.rs` and the `anyhow!` in `src/codegen/mod.rs::get_generator`. Both must list all 8 targets (`rust, go, typescript, python, java, c, cpp, treesitter`). Keep them in sync when adding a target; `src/core/error.rs::test_unsupported_language_error` asserts the exact string.
+
 ### AST (`grammar::ast`)
 
 | Type | Purpose |
 |------|---------|
-| `Grammar` | Root container: name, kind, options, rules |
-| `Rule` | Single rule with alternatives, modifiers (fragment, skip, channel), mode |
-| `Alternative` | One branch of a rule (`\|`-separated) |
-| `Element` | One item inside an alternative (rule ref, token ref, literal, charset, etc.) |
-| `ElementKind` | Enum: `RuleRef`, `TokenRef`, `Literal`, `CharSet`, `Optional`, `ZeroOrMore`, `Group`, `Dot`, `Range`, `Predicate` |
+| `Grammar` | Root container: `name`, `kind`, `options`, `token_specs`, `channel_specs`, `actions`, `rules` |
+| `Rule` | Single rule: `name`, `is_fragment`, `modifiers`, `return_type`, `locals_decl`, `throws`, `alternatives`, `commands`, `mode` |
+| `RuleModifier` | Enum: `Public`, `Private`, `Protected`, `Fragment` — rule-level visibility/fragment flags |
+| `Alternative` | One branch of a rule (`\|`-separated); `elements` + optional `label` |
+| `Element` | One item inside an alternative (rule ref, token ref, literal, charset, etc.) + optional `label` |
+| `ElementKind` | Enum: `RuleRef`, `TokenRef`, `StringLiteral`, `Range`, `CharSet`, `Optional`, `ZeroOrMore`, `OneOrMore`, `Group`, `Action`, `Predicate`, `Dot`, `Not` |
+| `AltBlock` | A group of alternatives used by `Optional` / `ZeroOrMore` / `OneOrMore` / `Group` |
 | `CharSetDef` | Character set definition: list of `CharRange` + negation flag |
-| `LexerCommand` | Lexer-side action: `skip`, `channel(NAME)`, `pushMode(NAME)`, `popMode`, `mode(NAME)` |
+| `CharRange` | Inclusive `start..=end` character range |
+| `LexerCommand` | **Struct** `{ name: String, arg: Option<String> }` — a lexer-side action. Built via `LexerCommand::skip()`, `::channel(name)`, `::push_mode(name)`, `::pop_mode()`, `::mode(name)`, `::r#type(name)` |
 | `ModeTarget` | Return type of `LexerCommand::mode_target()` — `Named(String)` or `Default` |
 | `PredicateInfo` | One `{ ... }?` predicate location: `rule_name`, `alternative_index`, `element_index`, `source`. Returned by `Grammar::predicates()`. |
 | `ChannelInfo` | One lexer channel: `name` (declared via `channels { HIDDEN }` or referenced implicitly by `-> channel(NAME)`) plus `assigned_rules: Vec<String>`. Returned by `Grammar::channels()`. |
+| `GrammarAction` | A grammar-level action: `scope`, `name`, `content` |
 
 All AST types implement `Debug`, `Clone`, `PartialEq`, `Serialize`, `Deserialize`.
 
@@ -200,8 +207,9 @@ Computed per-rule over the transformed grammar. Used by codegen to determine par
 
 ### Left-Recursion Elimination
 
-`left_rec.rs` provides:
+`left_rec.rs` provides one public entry point plus three private helpers:
 
+- `eliminate_left_recursion(rules: &[Rule]) -> Vec<Rule>` — the public entry point.
 - `has_direct_left_recursion(rule)` — checks if first element references the rule itself.
 - `transform_direct_left_recursion(rule)` — converts `A → A α \| β` into `A → β A'` and `A' → α A' \| ε`.
 - `eliminate_indirect_lr(rules)` — resolves mutual/indirect left recursion via rule reordering and substitution.
@@ -240,6 +248,19 @@ pub trait CodeGenerator {
 
 Each target language lives in its own file (`rust.rs`, `go.rs`, etc.) and implements this trait.
 
+### Two CodeGenerator Traits
+
+There are **two** traits named `CodeGenerator` in this crate, and it matters which one you mean:
+
+| Trait | Location | Used by |
+|---|---|---|
+| `codegen::CodeGenerator` | `src/codegen/mod.rs` | **All 8 codegen targets.** This is the real extension point. |
+| `core::CodeGenerator` | `src/core/traits.rs` | Nothing. No type implements it; no code calls it. |
+
+`core/traits.rs` also defines `GrammarParser` and `SemanticAnalyzer`, which are likewise unimplemented and unused. They were introduced in TODO item 3 as a scaffold; the actual pipeline is concrete code (`G4Lexer`/`G4Parser` → `ProcessedGrammar::process` → `codegen::get_generator`) rather than trait-based dispatch.
+
+**When adding a new target language, implement `codegen::CodeGenerator`** — not the `core` one. The `core` traits are dead weight; removing them is tracked on the backlog. Because both are re-exported at the crate root, `use pargen::CodeGenerator;` resolves to the `core` one and will not satisfy the `codegen` trait bound — import `pargen::codegen::CodeGenerator` when writing a generator.
+
 ### `CodeWriter`
 
 A small indentation helper used by every generator:
@@ -268,12 +289,21 @@ let code = w.to_string();
 ### Generating for a New Language
 
 1. Create `src/codegen/<lang>.rs`.
-2. Define a struct (e.g., `LangGenerator`) and implement `CodeGenerator`.
+2. Define a struct (e.g., `LangGenerator`) and implement **`codegen::CodeGenerator`**:
+   ```rust
+   impl CodeGenerator for LangGenerator {
+       fn lang_name(&self) -> &str { "Lang" }
+       fn file_extension(&self) -> &str { ".lang" }
+       fn generate(&self, pg: &ProcessedGrammar) -> String { /* ... */ }
+   }
+   ```
 3. Register it in `codegen::get_generator`:
    ```rust
    "lang" => Ok(Box::new(lang::LangGenerator)),
    ```
-4. Add a snapshot or integration test in `tests/`.
+4. Add the language to the supported list in `src/core/error.rs` (`UnsupportedLanguage` message) and `src/codegen/mod.rs` (the `anyhow!` message) — both must stay in sync.
+5. Add a snapshot or integration test in `tests/`, and update the test-count ledger in this file and in `TODO.md`.
+6. Add the target to the CLI help text in `src/main.rs` and to the tables in `README.md` / `SPEC.md`.
 
 ---
 
@@ -327,9 +357,9 @@ walk_calculator(&mut PrintDots, &tree);
 ## Public API (`lib.rs`)
 
 ```rust
-pub use core::{Error, Result, Diagnostic, DiagnosticSeverity, SourceLocation, ErrorBag};
+pub use core::{Error, Result, Diagnostic, DiagnosticSeverity, ErrorBag, SourceLocation};
 pub use core::{GrammarParser, SemanticAnalyzer, CodeGenerator};
-pub use grammar::{Grammar, GrammarKind, Rule, Alternative, Element, ElementKind, PredicateInfo, ChannelInfo};
+pub use grammar::{Grammar, GrammarKind, Rule, RuleModifier, Alternative, Element, ElementKind, PredicateInfo, ChannelInfo};
 pub use analysis::ProcessedGrammar;
 
 pub fn parse_grammar_file(path: &str) -> anyhow::Result<Grammar>;
@@ -339,6 +369,8 @@ pub fn generate(grammar: Grammar, lang: &str, output_dir: &str) -> anyhow::Resul
 ```
 
 These functions are the primary programmatic interface. `parse_grammar_source` is the strict entry point; `parse_grammar_source_detailed` is the recovery entry point — it returns the partial grammar plus every diagnostic, never `Err`.
+
+> **Note**: `pargen::CodeGenerator` re-exports the *unused* `core::traits::CodeGenerator`. The trait you need when writing a generator is `pargen::codegen::CodeGenerator` — see "Two CodeGenerator Traits" above.
 
 ---
 
@@ -367,7 +399,8 @@ Tests are organized by scope:
 | `src/grammar/parser.rs` (`#[cfg(test)]`) | 39 | Grammar headers, rules, alternatives, labels, actions, fragments, error cases, recovery, modes |
 | `src/analysis/left_rec.rs` (`#[cfg(test)]`) | 7 | Direct/indirect left recursion, empty alternatives |
 | `src/core/error.rs` (`#[cfg(test)]`) | 20 | Display, IO conversion, serde round-trip, clone/equality, ErrorBag + Diagnostic builders |
-| `tests/integration_test.rs` | 33 | End-to-end parse + generate for all 8 targets, error cases, `parse_grammar_source_detailed`, mode helpers, semantic predicate detection |
+| `src/grammar/ast.rs` (`#[cfg(test)]`) | 10 | Semantic-predicate detection, lexer-channel detection, serde shapes |
+| `tests/integration_test.rs` | 36 | End-to-end parse + generate for all 8 targets, error cases, `parse_grammar_source_detailed`, mode helpers, semantic predicate detection |
 | `tests/codegen_test.rs` | 29 | Structure verification + insta snapshots per language, mode-aware Rust codegen, visitor/listener/walker codegen (Rust target only), charset lexer regression tests |
 | `tests/bench_smoke.rs` | 3 | Smoke-tests the public API the criterion benches depend on (`parse_grammar_source`, `parse_grammar_source_detailed`, `ProcessedGrammar::process`, `codegen::get_generator`). Ensures a regression in those APIs surfaces in `cargo test`, not only `cargo bench`. |
 
@@ -444,4 +477,4 @@ The `src/mcp.rs` module exposes five tools over stdio transport:
 
 ---
 
-Last updated: 2026-07-31
+Last updated: 2026-10-31

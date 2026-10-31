@@ -19,7 +19,7 @@ pub enum Error {
     #[error("Code generation error: {0}")]
     Codegen(String),
 
-    #[error("Unsupported language: {0}. Supported: rust, go, typescript, python, java, c, cpp")]
+    #[error("Unsupported language: {0}. Supported: rust, go, typescript, python, java, c, cpp, treesitter")]
     UnsupportedLanguage(String),
 
     #[error("Validation failed with {count} diagnostic(s)")]
@@ -325,7 +325,10 @@ mod tests {
     #[test]
     fn test_unsupported_language_error() {
         let err = Error::UnsupportedLanguage("swift".to_string());
-        assert_eq!(err.to_string(), "Unsupported language: swift. Supported: rust, go, typescript, python, java, c, cpp");
+        assert_eq!(
+            err.to_string(),
+            "Unsupported language: swift. Supported: rust, go, typescript, python, java, c, cpp, treesitter"
+        );
     }
 
     #[test]

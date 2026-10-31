@@ -32,7 +32,7 @@ You already have ANTLR4 grammars. Rewriting them for every target language — o
 **Reach for something else when you:**
 
 - Are starting from scratch in Rust only — [LALRPOP](https://github.com/lalrpop/lalrpop) or [Pest](https://github.com/pest-parser/pest) may be a better fit
-- Need full ANTLR4 features (visitor/listener, lexer modes, semantic predicates) — Pargen does not aim for full parity yet
+- Need full ANTLR4 feature parity (semantic predicate enforcement, lexer channels) — Pargen detects and reports these but does not yet enforce them at runtime
 - Need incremental, error-tolerant parsing for a live editor — generate a Tree-sitter grammar with Pargen, then use Tree-sitter's runtime
 
 ## Features
@@ -45,21 +45,24 @@ You already have ANTLR4 grammars. Rewriting them for every target language — o
 - **Structured errors** — Source locations on lexer/parser failures
 - **Error recovery & multi-error reporting** — Continues parsing past errors and reports every diagnostic at once
 - **Lexer modes** — `mode NAME;` blocks (default + named) with `pushMode` / `popMode` / `mode` commands
+- **Visitor / listener** — Rust target emits `<Name>Visitor` / `<Name>Listener` traits plus `walk_*` tree-walkers
 - **MCP server** — `pargen-mcp` binary with 5 tools for AI integration
 - **Structured logging** — `tracing`-based output with `RUST_LOG` support
 
 ## Supported Target Languages
 
-| Language | Status | Extension |
+| Language | Status | Output file |
 |---|---|---|
-| Rust | Supported | `.rs` |
-| Go | Supported | `.go` |
-| TypeScript | Supported | `.ts` |
-| Python | Supported | `.py` |
-| Java | Supported | `.java` |
-| C | Supported | `.c/.h` |
-| C++ | Supported | `.cpp/.hpp` |
-| Tree-sitter | Supported | `grammar.js` |
+| Rust | Supported | `{name}_parser.rs` |
+| Go | Supported | `{name}_parser.go` |
+| TypeScript | Supported | `{name}_parser.ts` |
+| Python | Supported | `{name}_parser.py` |
+| Java | Supported | `{name}_parser.java` |
+| C | Supported | `{name}_parser.h` |
+| C++ | Supported | `{name}_parser.hpp` |
+| Tree-sitter | Supported | `{name}_parser.js` |
+
+> The C and C++ targets emit a single header-only file (`*.h` / `*.hpp`) containing both the lexer and the parser. Tree-sitter output is a `grammar.js` module (the file is named `{name}_parser.js`).
 
 ## Installation
 
@@ -121,8 +124,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for module layout and extension points.
 
 ```bash
 cargo build
-cargo test          # 148 tests
-RUST_LOG=debug cargo run -- generate -g examples/calc.g4 -l rust
+cargo test          # 175 tests
+
+# The crate ships two binaries (`pargen`, `pargen-mcp`), so `cargo run` needs
+# an explicit `--bin pargen` unless a `default-run` is set in Cargo.toml.
+RUST_LOG=debug cargo run --bin pargen -- generate -g path/to/grammar.g4 -l rust -o output/
 ```
 
 ## Error Recovery
@@ -167,6 +173,52 @@ and per-mode dispatch functions. `pushMode(NAME)`, `popMode`, and
 `mode(NAME)` lexer commands translate to assignments that update the
 mode state after a token matches. Call `Grammar::lexer_modes()` to list
 all modes declared in a grammar (always including `DEFAULT_MODE`).
+
+> **Rust target only.** The other 7 targets currently treat every rule as
+> belonging to the default mode — a `mode NAME;` block is parsed and
+> recorded, but the generated lexer does not switch modes at runtime.
+
+## Visitors and Listeners (Rust target)
+
+The Rust target emits two tree-walker traits over the generated `<Name>Node`
+CST, plus traversal functions:
+
+```rust
+pub trait CalculatorVisitor {
+    fn visit_expr(&mut self, _node: &CalculatorNode) {}
+    fn visit_token(&mut self, _node: &CalculatorNode) {}
+}
+
+pub trait CalculatorListener {
+    fn enter_expr(&mut self, _node: &CalculatorNode) {}
+    fn exit_expr(&mut self, _node: &CalculatorNode) {}
+    fn visit_token(&mut self, _node: &CalculatorNode) {}
+}
+```
+
+- `walk_calculator(visitor, &node)` — visitor DFS; calls `visit_<rule>` *before* recursing.
+- `walk_calculator_listen(listener, &node)` — listener DFS; brackets children between `enter_<rule>` and `exit_<rule>`.
+
+All trait methods have no-op defaults, so you override only what you need.
+The walkers accept trait objects (`?Sized` bound), so `Box<dyn Visitor>` works.
+
+```rust
+struct PrintDots;
+impl CalculatorVisitor for PrintDots {
+    fn visit_expr(&mut self, n: &CalculatorNode) {
+        println!("[expr with {} children]", match n {
+            CalculatorNode::expr { children } => children.len(),
+            _ => 0,
+        });
+    }
+}
+let tree = parser.parse_expr()?;
+walk_calculator(&mut PrintDots, &tree);
+```
+
+> **Rust target only.** The other 7 targets emit language-idiomatic ASTs
+> without a typed CST enum root, so the same machinery does not translate
+> cleanly yet.
 
 ## License
 

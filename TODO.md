@@ -17,6 +17,8 @@
 - `CodeGenerator` trait: `generate`, `target_language`
 - Unified `Error` / `Result` types with `thiserror`
 
+> **Note (2026-10-31 audit)**: these three traits are **unused** — no type implements them and no code calls them. The real extension point is `codegen::CodeGenerator` (`src/codegen/mod.rs`), which all 8 targets implement. `GrammarParser` and `SemanticAnalyzer` have no counterpart at all: the pipeline is concrete code (`G4Lexer`/`G4Parser` → `ProcessedGrammar::process` → `codegen::get_generator`). Because `pargen::CodeGenerator` re-exports the *core* one, writing a generator requires `use pargen::codegen::CodeGenerator`. Removal is tracked as a backlog item.
+
 ### [x] 4. Add Serde Serialization to AST
 - Add `Serialize` / `Deserialize` derives to `Grammar`, `Rule`, `Alternative`, `Element`, etc.
 - Enables programmatic inspection and future MCP tooling
@@ -116,6 +118,8 @@ strip = true
 - **Tests**: 3 new regression tests in `tests/codegen_test.rs::test_rust_codegen_charset_*` lock the absence of undefined refs, presence of inline range checks, and behavior under negation.
 
 ## Completed
+
+### Lexer Modes (TODO item 16)
 - `Rule::mode: Option<String>` tracks which mode each rule belongs to
 - `Grammar::lexer_modes()` lists all modes (default + named, sorted)
 - `Grammar::lexer_rules_in_mode(mode)` groups rules by mode
@@ -141,9 +145,9 @@ strip = true
   - `parse_grammar_source_detailed`: ~4.1 µs
   - `codegen_rust_full_pipeline`: ~260 µs (~58× slower than parse — String allocation per line is the dominant cost)
   - `parse_grammar_source_scaling_n64`: ~11.3 µs (synthetic N=64 implicit-token grammar)
-- 3 smoke tests in `tests/bench_smoke.rs` exercise the same public API the benches call. Run via `cargo test --lib` (integration suite); the benchmark harness itself is invoked via `cargo bench`.
+- 3 smoke tests in `tests/bench_smoke.rs` exercise the same public API the benches call. Run via `cargo test --test bench_smoke`; the benchmark harness itself is invoked via `cargo bench`.
 
-## Completed
+### Full Item Index
 
 - [x] 1. Upgrade to Rust Edition 2024
 - [x] 2. Add Core Dependencies (serde, thiserror, tracing, insta, criterion, tempfile)
@@ -166,14 +170,37 @@ strip = true
 - [x] 19. Rust Lexer Codegen: Fix Undefined `RANGES` / `char_in_ranges` References. Pre-existing bug from MEMORY.md. Generated lexers for grammars with charset rules (`[a-z]+`, `[\t\n]+`, etc.) emitted references to `Self::char_in_ranges` and `&RANGES` — neither of which was ever defined. Replaced with inline range checks via new `charset_match_expr` helper. 3 regression tests + snapshot refresh.
 - [x] 20. Lexer Channel Detection (reporting-only). Added `Grammar::channels() -> Vec<ChannelInfo>` plus `ChannelInfo { name, assigned_rules: Vec<String> }`. Surfaces both declared (`channels { HIDDEN }`) and implicitly-referenced channels in `-> channel(NAME)` order. CLI `check` prints `Lexer channels: N (routing not emitted by codegen yet)` plus per-channel rule list. MCP `get_grammar_info` adds `channels` array. 9 new tests (6 inline in `src/grammar/ast.rs` + 3 integration) covering declared-only, implicit-only, declared+implicit, multiple-rules-to-one-channel, ordering, and serde round-trip. Discovered that the strict lexer still slurps `{ HIDDEN }` as a single Action token (a pre-existing limitation blocking `channels { ... }` declaration parsing); integration test uses `parse_grammar_source_detailed` for the recovery path and demonstrates the implicit-channel fallback.
 
-**Test Summary**: 175 tests passing (was 172; +3 for bench smoke)
-- 31 lexer unit tests (includes 4 proptests + 4 recovery)
+**Test Summary**: 175 tests passing
+- 31 lexer unit tests (includes 1 proptest property + 4 recovery)
 - 39 parser unit tests (includes 5 recovery + 5 mode parsing)
 - 7 left-recursion unit tests
-- 20 core error unit tests (unchanged)
+- 20 core error unit tests
 - 10 ast unit tests (predicate + channel detection coverage)
-- 39 integration tests (was 36; +3 for bench smoke — exercises the public API the benches depend on)
-- 29 codegen tests (10 structure + 8 insta snapshots + 3 mode codegen + 5 visitor/listener + 3 charset regression)
+- 36 integration tests (end-to-end CLI/MCP/public-API coverage)
+- 29 codegen tests (structure assertions + 8 insta snapshots + mode codegen + visitor/listener + charset regression)
+
+---
+
+## Audit Findings (2026-10-31)
+
+Doc-drift audit across `README.md`, `SPEC.md`, `ARCHITECTURE.md`, `TODO.md`, and `MEMORY.md` against the implementation. All *documentation* drift was fixed in this pass. The items below are the **code-level** findings that remain.
+
+### High Value
+
+- [ ] **Remove the unused `core/traits.rs` traits** — `GrammarParser`, `SemanticAnalyzer`, and `core::CodeGenerator` have no implementors and no callers. Worse, `pargen::CodeGenerator` re-exports the *core* one while all 8 targets implement `codegen::CodeGenerator` — so `use pargen::CodeGenerator` silently gives you the wrong trait. Deleting `src/core/traits.rs` and its three re-exports from `core/mod.rs` and `lib.rs` removes the trap. Breaking-change note: these are public API, so it warrants a version bump.
+  - Success criterion: `grep -rn "GrammarParser\|SemanticAnalyzer" src/ tests/` returns nothing; `pargen::codegen::CodeGenerator` is the only `CodeGenerator` in the public API; `cargo test` stays green.
+- [ ] **Single source of truth for the supported-language list** — The list lives in three places: the `thiserror` message in `src/core/error.rs`, the `anyhow!` in `src/codegen/mod.rs::get_generator`, and the CLI help text in `src/main.rs`. They already drifted once (the `thiserror` message omitted `treesitter` until this audit). Fix: expose a `pub const SUPPORTED_LANGUAGES: &[&str]` from `codegen` and format all three from it.
+
+### Medium Value
+
+- [ ] **Set `default-run` in `Cargo.toml`** — The crate ships two binaries (`pargen`, `pargen-mcp`) and has no `default-run` key, so a bare `cargo run -- …` fails with *"could not determine which binary to run"*. Every invocation needs `--bin pargen`. Adding `default-run = "pargen"` to `[package]` makes `cargo run -- generate …` work as users expect. (Alternatively, drop the `[[bin]]` section for `pargen` and rely on the `src/main.rs` convention.)
+- [ ] **Verify generated parsers compile in every target language** — Today the Rust target's output is compile-checked manually (see MEMORY.md §3b), but the other 7 targets are only snapshot-tested. A `tests/` case that shells out to `go build` / `tsc` / `python -m py_compile` / `javac` / `gcc` / `g++` / `node --check` would turn "looks right" into "is right". At minimum, add a Python syntax check (no toolchain install needed) and a `node --check` for the Tree-sitter target.
+  - Verified manually on 2026-10-31: all 8 targets generate, the Rust output compiles standalone (warnings only), and the Python and Tree-sitter outputs pass `py_compile` / `node --check`. Only the Rust, Python, and Tree-sitter targets have a toolchain-free or locally-available check today.
+- [ ] **Add a doc-drift test** — mathr enforces its `AGENTS.md` module list and `TODO.md` test counts via `tests/docs_sync.rs`, which fails `cargo test` when they go stale. pargen has the same recurring drift class (test counts, target lists, AST type names) but no automated guard. A `tests/docs_sync.rs` asserting the test-count ledger in `ARCHITECTURE.md`/`TODO.md` matches `cargo test` output, and that the supported-language list in the docs matches `codegen::SUPPORTED_LANGUAGES`, would prevent this audit from being needed again.
+
+### Lower Priority / Exploratory
+
+- [ ] **`parse` CLI subcommand** — Still a placeholder: it parses the grammar but never runs a generated parser against the input. Deferred until a target's runtime is embeddable.
 
 ---
 
@@ -209,4 +236,4 @@ Compared against ANTLR4, LALRPOP, Pest, and Tree-sitter. Prioritized by competit
 
 ---
 
-Last updated: 2026-07-31
+Last updated: 2026-10-31

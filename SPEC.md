@@ -14,11 +14,20 @@
 
 ## Non-Goals
 
-- Full ANTLR4 feature parity (visitor/listener, channels, semantic predicates).
+- Full ANTLR4 feature parity. Specifically: semantic predicate *enforcement* and lexer *channel routing* are detected and reported, but not executed at runtime.
 - Incremental or error-tolerant parsing in generated parsers.
 - Building a full compiler pipeline (type checking, optimization, code emission beyond parsers).
+- Visitor/listener generation for the non-Rust targets (the Rust target emits them; see below).
 
-Note: as of v0.1.x, lexer modes ARE supported in the Rust target (other targets treat all rules as default-mode).
+### Supported Subsets
+
+| Feature | Status |
+|---|---|
+| Lexer modes (`mode NAME;`) | Implemented in the Rust target; the other 7 targets parse modes but treat all rules as default-mode. |
+| Visitor / listener traits | Implemented in the Rust target only. |
+| Semantic predicates (`{ ... }?`) | Detection + reporting only. Not enforced at runtime in any target. |
+| Lexer channels (`-> channel(NAME)`) | Detection + reporting only. Tokens are not routed by channel in any target. |
+| Grammar `import` / `tokenVocab` | Parsed but not merged across files. |
 
 ## Technical Stack
 
@@ -46,16 +55,30 @@ Note: as of v0.1.x, lexer modes ARE supported in the Rust target (other targets 
 
 ### Code Generation
 
-Each target implements the `CodeGenerator` trait. Output is written to `{grammar_name}_parser{extension}` in the specified directory.
+Each target implements the `codegen::CodeGenerator` trait. Output is written to `{grammar_name_lowercase}_parser{extension}` in the specified directory.
+
+| Language | CLI flag | Output extension |
+|----------|----------|------------------|
+| Rust | `rust` | `.rs` |
+| Go | `go` | `.go` |
+| TypeScript | `typescript`, `ts` | `.ts` |
+| Python | `python`, `py` | `.py` |
+| Java | `java` | `.java` |
+| C | `c` | `.h` |
+| C++ | `cpp`, `c++`, `cplusplus` | `.hpp` |
+| Tree-sitter | `treesitter`, `tree-sitter` | `.js` |
+
+The C and C++ targets emit a single header-only file containing both the lexer and the parser. The Tree-sitter target emits a `grammar.js` module (named `{grammar}_parser.js`).
 
 ## Quality Bar
 
-- All changes must pass `cargo test` (currently 148 tests).
+- All changes must pass `cargo test` (currently 175 tests).
 - New codegen targets require integration tests in `tests/`.
 - New lexer/parser behavior requires unit tests alongside the component.
 - Public API changes must be reflected in `README.md` and `ARCHITECTURE.md`.
 - Structured errors must include source location (line, column) where applicable.
 - Diagnostics may include a `note` for fix-it hints.
+- The test-count ledger is maintained in both `ARCHITECTURE.md` and `TODO.md`.
 
 ## CLI Commands
 
@@ -78,17 +101,8 @@ Each target implements the `CodeGenerator` trait. Output is written to `{grammar
 
 ## Supported Targets
 
-| Language | CLI flag | Output |
-|----------|----------|--------|
-| Rust | `rust` | `.rs` |
-| Go | `go` | `.go` |
-| TypeScript | `typescript`, `ts` | `.ts` |
-| Python | `python`, `py` | `.py` |
-| Java | `java` | `.java` |
-| C | `c` | `.c` |
-| C++ | `cpp`, `c++`, `cplusplus` | `.cpp` |
-| Tree-sitter | `treesitter`, `tree-sitter` | `grammar.js` |
+See the Code Generation table above for the authoritative flag and extension mapping.
 
 ---
 
-Last updated: 2026-07-31
+Last updated: 2026-10-31
